@@ -1,0 +1,3592 @@
+[
+  {
+    "name": "WCBS-TV",
+    "lat": 40.7484,
+    "lng": -73.9857,
+    "channels": [
+      36
+    ],
+    "erp": 715,
+    "radius": 95
+  },
+  {
+    "name": "WNBC",
+    "lat": 40.7484,
+    "lng": -73.9857,
+    "channels": [
+      35
+    ],
+    "erp": 645,
+    "radius": 95
+  },
+  {
+    "name": "WABC-TV",
+    "lat": 40.7484,
+    "lng": -73.9857,
+    "channels": [
+      7
+    ],
+    "erp": 24.5,
+    "radius": 90
+  },
+  {
+    "name": "WNYW",
+    "lat": 40.7484,
+    "lng": -73.9857,
+    "channels": [
+      27
+    ],
+    "erp": 550,
+    "radius": 95
+  },
+  {
+    "name": "WWOR-TV",
+    "lat": 40.7127,
+    "lng": -74.0059,
+    "channels": [
+      25
+    ],
+    "erp": 540,
+    "radius": 95
+  },
+  {
+    "name": "WPIX",
+    "lat": 40.7484,
+    "lng": -73.9857,
+    "channels": [
+      11
+    ],
+    "erp": 36.4,
+    "radius": 90
+  },
+  {
+    "name": "WNET",
+    "lat": 40.7127,
+    "lng": -74.0059,
+    "channels": [
+      12
+    ],
+    "erp": 27.5,
+    "radius": 90
+  },
+  {
+    "name": "WPXN-TV",
+    "lat": 40.7484,
+    "lng": -73.9857,
+    "channels": [
+      34
+    ],
+    "erp": 670,
+    "radius": 95
+  },
+  {
+    "name": "WNJU",
+    "lat": 40.7127,
+    "lng": -74.0059,
+    "channels": [
+      35
+    ],
+    "erp": 590,
+    "radius": 95
+  },
+  {
+    "name": "WNJW",
+    "lat": 40.7484,
+    "lng": -73.9857,
+    "channels": [
+      21
+    ],
+    "erp": 510,
+    "radius": 95
+  },
+  {
+    "name": "WXTV-DT",
+    "lat": 40.7484,
+    "lng": -73.9857,
+    "channels": [
+      23
+    ],
+    "erp": 600,
+    "radius": 95
+  },
+  {
+    "name": "WFUT-DT",
+    "lat": 40.7484,
+    "lng": -73.9857,
+    "channels": [
+      26
+    ],
+    "erp": 580,
+    "radius": 95
+  },
+  {
+    "name": "KCBS-TV",
+    "lat": 34.2267,
+    "lng": -118.0683,
+    "channels": [
+      31
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KNBC",
+    "lat": 34.2267,
+    "lng": -118.0683,
+    "channels": [
+      36
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KABC-TV",
+    "lat": 34.2267,
+    "lng": -118.0683,
+    "channels": [
+      7
+    ],
+    "erp": 25,
+    "radius": 90
+  },
+  {
+    "name": "KTLA",
+    "lat": 34.2267,
+    "lng": -118.0683,
+    "channels": [
+      35
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KTTV",
+    "lat": 34.2267,
+    "lng": -118.0683,
+    "channels": [
+      11
+    ],
+    "erp": 140,
+    "radius": 95
+  },
+  {
+    "name": "KCOP-TV",
+    "lat": 34.2267,
+    "lng": -118.0683,
+    "channels": [
+      13
+    ],
+    "erp": 140,
+    "radius": 95
+  },
+  {
+    "name": "KCAL-TV",
+    "lat": 34.2267,
+    "lng": -118.0683,
+    "channels": [
+      9
+    ],
+    "erp": 140,
+    "radius": 95
+  },
+  {
+    "name": "KCET",
+    "lat": 34.2267,
+    "lng": -118.0683,
+    "channels": [
+      28
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KMEX-DT",
+    "lat": 34.2267,
+    "lng": -118.0683,
+    "channels": [
+      34
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KFTR-DT",
+    "lat": 34.2267,
+    "lng": -118.0683,
+    "channels": [
+      29
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KOCE-TV",
+    "lat": 33.6,
+    "lng": -117.8,
+    "channels": [
+      18
+    ],
+    "erp": 500,
+    "radius": 85
+  },
+  {
+    "name": "KPXN-TV",
+    "lat": 34.2267,
+    "lng": -118.0683,
+    "channels": [
+      24
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WBBM-TV",
+    "lat": 41.8789,
+    "lng": -87.6359,
+    "channels": [
+      12
+    ],
+    "erp": 20,
+    "radius": 85
+  },
+  {
+    "name": "WMAQ-TV",
+    "lat": 41.8827,
+    "lng": -87.6233,
+    "channels": [
+      33
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WLS-TV",
+    "lat": 41.8789,
+    "lng": -87.6359,
+    "channels": [
+      22
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WFLD",
+    "lat": 41.8827,
+    "lng": -87.6233,
+    "channels": [
+      32
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WGN-TV",
+    "lat": 41.8827,
+    "lng": -87.6233,
+    "channels": [
+      19
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WTTW",
+    "lat": 41.8827,
+    "lng": -87.6233,
+    "channels": [
+      25
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WCIU-TV",
+    "lat": 41.8789,
+    "lng": -87.6359,
+    "channels": [
+      23
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WPWR-TV",
+    "lat": 41.8827,
+    "lng": -87.6233,
+    "channels": [
+      32
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WSNS-TV",
+    "lat": 41.8827,
+    "lng": -87.6233,
+    "channels": [
+      33
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WCPX-TV",
+    "lat": 41.8827,
+    "lng": -87.6233,
+    "channels": [
+      34
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KPRC-TV",
+    "lat": 29.57,
+    "lng": -95.49,
+    "channels": [
+      35
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KHOU",
+    "lat": 29.57,
+    "lng": -95.49,
+    "channels": [
+      11
+    ],
+    "erp": 95,
+    "radius": 95
+  },
+  {
+    "name": "KTRK-TV",
+    "lat": 29.57,
+    "lng": -95.49,
+    "channels": [
+      13
+    ],
+    "erp": 115,
+    "radius": 95
+  },
+  {
+    "name": "KRIV",
+    "lat": 29.57,
+    "lng": -95.49,
+    "channels": [
+      26
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KIAH",
+    "lat": 29.57,
+    "lng": -95.49,
+    "channels": [
+      34
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KTXH",
+    "lat": 29.57,
+    "lng": -95.49,
+    "channels": [
+      19
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KUHT",
+    "lat": 29.57,
+    "lng": -95.49,
+    "channels": [
+      8
+    ],
+    "erp": 30,
+    "radius": 85
+  },
+  {
+    "name": "KTMD",
+    "lat": 29.57,
+    "lng": -95.49,
+    "channels": [
+      22
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KXLN-DT",
+    "lat": 29.57,
+    "lng": -95.49,
+    "channels": [
+      30
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KPXB-TV",
+    "lat": 29.57,
+    "lng": -95.49,
+    "channels": [
+      32
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KTVK",
+    "lat": 33.33,
+    "lng": -112.06,
+    "channels": [
+      24
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KPHO-TV",
+    "lat": 33.33,
+    "lng": -112.06,
+    "channels": [
+      17
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KPNX",
+    "lat": 33.33,
+    "lng": -112.06,
+    "channels": [
+      12
+    ],
+    "erp": 30,
+    "radius": 90
+  },
+  {
+    "name": "KSAZ-TV",
+    "lat": 33.33,
+    "lng": -112.06,
+    "channels": [
+      10
+    ],
+    "erp": 35,
+    "radius": 90
+  },
+  {
+    "name": "KASW",
+    "lat": 33.33,
+    "lng": -112.06,
+    "channels": [
+      27
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KAET",
+    "lat": 33.33,
+    "lng": -112.06,
+    "channels": [
+      8
+    ],
+    "erp": 25,
+    "radius": 85
+  },
+  {
+    "name": "KUTP",
+    "lat": 33.33,
+    "lng": -112.06,
+    "channels": [
+      26
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KTVW-DT",
+    "lat": 33.33,
+    "lng": -112.06,
+    "channels": [
+      33
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KAZT-TV",
+    "lat": 33.33,
+    "lng": -112.06,
+    "channels": [
+      7
+    ],
+    "erp": 20,
+    "radius": 80
+  },
+  {
+    "name": "KYW-TV",
+    "lat": 40.04,
+    "lng": -75.24,
+    "channels": [
+      30
+    ],
+    "erp": 930,
+    "radius": 95
+  },
+  {
+    "name": "WCAU",
+    "lat": 40.04,
+    "lng": -75.24,
+    "channels": [
+      28
+    ],
+    "erp": 850,
+    "radius": 95
+  },
+  {
+    "name": "WPVI-TV",
+    "lat": 40.04,
+    "lng": -75.24,
+    "channels": [
+      6
+    ],
+    "erp": 15,
+    "radius": 80
+  },
+  {
+    "name": "WTXF-TV",
+    "lat": 40.04,
+    "lng": -75.24,
+    "channels": [
+      31
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WPHL-TV",
+    "lat": 40.04,
+    "lng": -75.24,
+    "channels": [
+      17
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WPSG",
+    "lat": 40.04,
+    "lng": -75.24,
+    "channels": [
+      33
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WHYY-TV",
+    "lat": 40.04,
+    "lng": -75.24,
+    "channels": [
+      13
+    ],
+    "erp": 30,
+    "radius": 90
+  },
+  {
+    "name": "WPPX-TV",
+    "lat": 40.04,
+    "lng": -75.24,
+    "channels": [
+      34
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WWSI",
+    "lat": 40.04,
+    "lng": -75.24,
+    "channels": [
+      28
+    ],
+    "erp": 800,
+    "radius": 95
+  },
+  {
+    "name": "WUVP-DT",
+    "lat": 40.04,
+    "lng": -75.24,
+    "channels": [
+      17
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KABB",
+    "lat": 29.27,
+    "lng": -98.13,
+    "channels": [
+      30
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WOAI-TV",
+    "lat": 29.27,
+    "lng": -98.13,
+    "channels": [
+      28
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KENS",
+    "lat": 29.27,
+    "lng": -98.13,
+    "channels": [
+      29
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KSAT-TV",
+    "lat": 29.27,
+    "lng": -98.13,
+    "channels": [
+      12
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "KWEX-DT",
+    "lat": 29.27,
+    "lng": -98.13,
+    "channels": [
+      24
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KLRN",
+    "lat": 29.27,
+    "lng": -98.13,
+    "channels": [
+      9
+    ],
+    "erp": 25,
+    "radius": 85
+  },
+  {
+    "name": "KPXL-TV",
+    "lat": 29.27,
+    "lng": -98.13,
+    "channels": [
+      26
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KFMB-TV",
+    "lat": 32.84,
+    "lng": -117.25,
+    "channels": [
+      8
+    ],
+    "erp": 20,
+    "radius": 85
+  },
+  {
+    "name": "KGTV",
+    "lat": 32.84,
+    "lng": -117.25,
+    "channels": [
+      10
+    ],
+    "erp": 30,
+    "radius": 85
+  },
+  {
+    "name": "KNSD",
+    "lat": 32.84,
+    "lng": -117.25,
+    "channels": [
+      17
+    ],
+    "erp": 500,
+    "radius": 85
+  },
+  {
+    "name": "KSWB-TV",
+    "lat": 32.84,
+    "lng": -117.25,
+    "channels": [
+      26
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KUSI-TV",
+    "lat": 32.84,
+    "lng": -117.25,
+    "channels": [
+      18
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KPBS",
+    "lat": 32.84,
+    "lng": -117.25,
+    "channels": [
+      19
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KBNT-CD",
+    "lat": 32.84,
+    "lng": -117.25,
+    "channels": [
+      24
+    ],
+    "erp": 150,
+    "radius": 60
+  },
+  {
+    "name": "KDFW",
+    "lat": 32.58,
+    "lng": -96.97,
+    "channels": [
+      35
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KXAS-TV",
+    "lat": 32.58,
+    "lng": -96.97,
+    "channels": [
+      24
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WFAA",
+    "lat": 32.58,
+    "lng": -96.97,
+    "channels": [
+      8
+    ],
+    "erp": 55,
+    "radius": 95
+  },
+  {
+    "name": "KTVT",
+    "lat": 32.58,
+    "lng": -96.97,
+    "channels": [
+      19
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KERA-TV",
+    "lat": 32.58,
+    "lng": -96.97,
+    "channels": [
+      14
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KTXA",
+    "lat": 32.58,
+    "lng": -96.97,
+    "channels": [
+      18
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KDFI",
+    "lat": 32.58,
+    "lng": -96.97,
+    "channels": [
+      27
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KUVN-DT",
+    "lat": 32.58,
+    "lng": -96.97,
+    "channels": [
+      33
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KSTR-DT",
+    "lat": 32.58,
+    "lng": -96.97,
+    "channels": [
+      34
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KPXD-TV",
+    "lat": 32.58,
+    "lng": -96.97,
+    "channels": [
+      25
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KNTV",
+    "lat": 37.5,
+    "lng": -121.87,
+    "channels": [
+      13
+    ],
+    "erp": 30,
+    "radius": 90
+  },
+  {
+    "name": "KICU-TV",
+    "lat": 37.5,
+    "lng": -121.87,
+    "channels": [
+      36
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KQEH",
+    "lat": 37.11,
+    "lng": -121.84,
+    "channels": [
+      30
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KSTS",
+    "lat": 37.11,
+    "lng": -121.84,
+    "channels": [
+      19
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KGO-TV",
+    "lat": 37.75,
+    "lng": -122.44,
+    "channels": [
+      12
+    ],
+    "erp": 24,
+    "radius": 90
+  },
+  {
+    "name": "KPIX-TV",
+    "lat": 37.75,
+    "lng": -122.44,
+    "channels": [
+      29
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KTVU",
+    "lat": 37.75,
+    "lng": -122.44,
+    "channels": [
+      26
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KRON-TV",
+    "lat": 37.75,
+    "lng": -122.44,
+    "channels": [
+      7
+    ],
+    "erp": 25,
+    "radius": 90
+  },
+  {
+    "name": "KBWB-TV",
+    "lat": 37.75,
+    "lng": -122.44,
+    "channels": [
+      28
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KWPX-TV",
+    "lat": 47.6,
+    "lng": -122.33,
+    "channels": [
+      33
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KING-TV",
+    "lat": 47.63,
+    "lng": -122.35,
+    "channels": [
+      25
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KIRO-TV",
+    "lat": 47.63,
+    "lng": -122.35,
+    "channels": [
+      23
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KOMO-TV",
+    "lat": 47.63,
+    "lng": -122.35,
+    "channels": [
+      30
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KCPQ",
+    "lat": 47.54,
+    "lng": -122.74,
+    "channels": [
+      13
+    ],
+    "erp": 35,
+    "radius": 90
+  },
+  {
+    "name": "WFXT",
+    "lat": 42.22,
+    "lng": -71.22,
+    "channels": [
+      34
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WCVB-TV",
+    "lat": 42.3,
+    "lng": -71.22,
+    "channels": [
+      33
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WBZ-TV",
+    "lat": 42.3,
+    "lng": -71.22,
+    "channels": [
+      20
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WHDH",
+    "lat": 42.34,
+    "lng": -71.21,
+    "channels": [
+      35
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WGBH-TV",
+    "lat": 42.34,
+    "lng": -71.21,
+    "channels": [
+      5
+    ],
+    "erp": 10,
+    "radius": 80
+  },
+  {
+    "name": "WSBK-TV",
+    "lat": 42.34,
+    "lng": -71.21,
+    "channels": [
+      21
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WFTV",
+    "lat": 28.56,
+    "lng": -81.08,
+    "channels": [
+      33
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WESH",
+    "lat": 28.91,
+    "lng": -81.31,
+    "channels": [
+      11
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "WKMG-TV",
+    "lat": 28.6,
+    "lng": -81.08,
+    "channels": [
+      26
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WOFL",
+    "lat": 28.56,
+    "lng": -81.08,
+    "channels": [
+      33
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WUCF-TV",
+    "lat": 28.6,
+    "lng": -81.08,
+    "channels": [
+      23
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KUSA",
+    "lat": 39.73,
+    "lng": -105.23,
+    "channels": [
+      9
+    ],
+    "erp": 35,
+    "radius": 90
+  },
+  {
+    "name": "KCNC-TV",
+    "lat": 39.73,
+    "lng": -105.23,
+    "channels": [
+      35
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KMGH-TV",
+    "lat": 39.73,
+    "lng": -105.23,
+    "channels": [
+      7
+    ],
+    "erp": 25,
+    "radius": 90
+  },
+  {
+    "name": "KDVR",
+    "lat": 39.73,
+    "lng": -105.23,
+    "channels": [
+      32
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KRMA-TV",
+    "lat": 39.73,
+    "lng": -105.23,
+    "channels": [
+      18
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WAGA-TV",
+    "lat": 33.74,
+    "lng": -84.32,
+    "channels": [
+      27
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WSB-TV",
+    "lat": 33.75,
+    "lng": -84.32,
+    "channels": [
+      32
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WXIA-TV",
+    "lat": 33.75,
+    "lng": -84.32,
+    "channels": [
+      10
+    ],
+    "erp": 45,
+    "radius": 95
+  },
+  {
+    "name": "WGCL-TV",
+    "lat": 33.75,
+    "lng": -84.32,
+    "channels": [
+      19
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WUPA",
+    "lat": 33.75,
+    "lng": -84.32,
+    "channels": [
+      36
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WPBA",
+    "lat": 33.75,
+    "lng": -84.32,
+    "channels": [
+      21
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WTVJ",
+    "lat": 25.54,
+    "lng": -80.46,
+    "channels": [
+      31
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WFOR-TV",
+    "lat": 25.54,
+    "lng": -80.46,
+    "channels": [
+      22
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WPLG",
+    "lat": 25.54,
+    "lng": -80.46,
+    "channels": [
+      10
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "WSVN",
+    "lat": 25.54,
+    "lng": -80.46,
+    "channels": [
+      9
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "WLTV-DT",
+    "lat": 25.54,
+    "lng": -80.46,
+    "channels": [
+      23
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WPBT",
+    "lat": 25.54,
+    "lng": -80.46,
+    "channels": [
+      26
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WLRN-TV",
+    "lat": 25.54,
+    "lng": -80.46,
+    "channels": [
+      20
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WDIV-TV",
+    "lat": 42.41,
+    "lng": -83.18,
+    "channels": [
+      32
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WJBK",
+    "lat": 42.41,
+    "lng": -83.18,
+    "channels": [
+      7
+    ],
+    "erp": 30,
+    "radius": 90
+  },
+  {
+    "name": "WXYZ-TV",
+    "lat": 42.41,
+    "lng": -83.18,
+    "channels": [
+      25
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WWJ-TV",
+    "lat": 42.41,
+    "lng": -83.18,
+    "channels": [
+      21
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WTVS",
+    "lat": 42.41,
+    "lng": -83.18,
+    "channels": [
+      20
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KARE",
+    "lat": 45.05,
+    "lng": -93.13,
+    "channels": [
+      11
+    ],
+    "erp": 45,
+    "radius": 95
+  },
+  {
+    "name": "WCCO-TV",
+    "lat": 45.05,
+    "lng": -93.13,
+    "channels": [
+      32
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KSTP-TV",
+    "lat": 45.05,
+    "lng": -93.13,
+    "channels": [
+      35
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KMSP-TV",
+    "lat": 45.05,
+    "lng": -93.13,
+    "channels": [
+      9
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "KTCA-TV",
+    "lat": 45.05,
+    "lng": -93.13,
+    "channels": [
+      34
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WJW",
+    "lat": 41.38,
+    "lng": -81.69,
+    "channels": [
+      8
+    ],
+    "erp": 35,
+    "radius": 90
+  },
+  {
+    "name": "WKYC",
+    "lat": 41.38,
+    "lng": -81.69,
+    "channels": [
+      19
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WEWS-TV",
+    "lat": 41.38,
+    "lng": -81.69,
+    "channels": [
+      15
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WVIZ",
+    "lat": 41.38,
+    "lng": -81.69,
+    "channels": [
+      35
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WOIO",
+    "lat": 41.38,
+    "lng": -81.69,
+    "channels": [
+      10
+    ],
+    "erp": 30,
+    "radius": 90
+  },
+  {
+    "name": "KMOV",
+    "lat": 38.58,
+    "lng": -90.33,
+    "channels": [
+      24
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KSDK",
+    "lat": 38.58,
+    "lng": -90.33,
+    "channels": [
+      35
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KTVI",
+    "lat": 38.58,
+    "lng": -90.33,
+    "channels": [
+      33
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KPLR-TV",
+    "lat": 38.58,
+    "lng": -90.33,
+    "channels": [
+      26
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KETC",
+    "lat": 38.58,
+    "lng": -90.33,
+    "channels": [
+      23
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WBAL-TV",
+    "lat": 39.33,
+    "lng": -76.65,
+    "channels": [
+      12
+    ],
+    "erp": 35,
+    "radius": 90
+  },
+  {
+    "name": "WJZ-TV",
+    "lat": 39.33,
+    "lng": -76.65,
+    "channels": [
+      11
+    ],
+    "erp": 35,
+    "radius": 90
+  },
+  {
+    "name": "WMAR-TV",
+    "lat": 39.33,
+    "lng": -76.65,
+    "channels": [
+      27
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WBFF",
+    "lat": 39.33,
+    "lng": -76.65,
+    "channels": [
+      26
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WMPT",
+    "lat": 39.33,
+    "lng": -76.65,
+    "channels": [
+      22
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WSOC-TV",
+    "lat": 35.29,
+    "lng": -80.68,
+    "channels": [
+      19
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WBTV",
+    "lat": 35.36,
+    "lng": -81.15,
+    "channels": [
+      23
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WCNC-TV",
+    "lat": 35.36,
+    "lng": -81.15,
+    "channels": [
+      24
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WJZY",
+    "lat": 35.36,
+    "lng": -81.15,
+    "channels": [
+      25
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WTVI",
+    "lat": 35.29,
+    "lng": -80.68,
+    "channels": [
+      11
+    ],
+    "erp": 30,
+    "radius": 85
+  },
+  {
+    "name": "WISH-TV",
+    "lat": 39.9,
+    "lng": -86.2,
+    "channels": [
+      9
+    ],
+    "erp": 35,
+    "radius": 90
+  },
+  {
+    "name": "WTHR",
+    "lat": 39.9,
+    "lng": -86.2,
+    "channels": [
+      13
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "WRTV",
+    "lat": 39.9,
+    "lng": -86.2,
+    "channels": [
+      25
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WXIN",
+    "lat": 39.9,
+    "lng": -86.2,
+    "channels": [
+      22
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WFYI",
+    "lat": 39.9,
+    "lng": -86.2,
+    "channels": [
+      21
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KGW",
+    "lat": 45.49,
+    "lng": -122.74,
+    "channels": [
+      26
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KOIN",
+    "lat": 45.49,
+    "lng": -122.74,
+    "channels": [
+      25
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KPTV",
+    "lat": 45.49,
+    "lng": -122.74,
+    "channels": [
+      12
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "KATU",
+    "lat": 45.49,
+    "lng": -122.74,
+    "channels": [
+      24
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KOPB-TV",
+    "lat": 45.49,
+    "lng": -122.74,
+    "channels": [
+      10
+    ],
+    "erp": 35,
+    "radius": 90
+  },
+  {
+    "name": "WTVT",
+    "lat": 27.81,
+    "lng": -82.26,
+    "channels": [
+      12
+    ],
+    "erp": 45,
+    "radius": 95
+  },
+  {
+    "name": "WFLA-TV",
+    "lat": 27.81,
+    "lng": -82.26,
+    "channels": [
+      9
+    ],
+    "erp": 45,
+    "radius": 95
+  },
+  {
+    "name": "WTSP",
+    "lat": 27.81,
+    "lng": -82.26,
+    "channels": [
+      10
+    ],
+    "erp": 45,
+    "radius": 95
+  },
+  {
+    "name": "WFTS-TV",
+    "lat": 27.81,
+    "lng": -82.26,
+    "channels": [
+      29
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WEDU",
+    "lat": 27.81,
+    "lng": -82.26,
+    "channels": [
+      13
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "WMOR-TV",
+    "lat": 27.81,
+    "lng": -82.26,
+    "channels": [
+      19
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KDBC-TV",
+    "lat": 31.81,
+    "lng": -106.48,
+    "channels": [
+      18
+    ],
+    "erp": 1000,
+    "radius": 95
+  },
+  {
+    "name": "KTSM-TV",
+    "lat": 31.81,
+    "lng": -106.48,
+    "channels": [
+      16
+    ],
+    "erp": 1000,
+    "radius": 95
+  },
+  {
+    "name": "KVIA-TV",
+    "lat": 31.81,
+    "lng": -106.48,
+    "channels": [
+      17
+    ],
+    "erp": 1000,
+    "radius": 95
+  },
+  {
+    "name": "KFOX-TV",
+    "lat": 31.81,
+    "lng": -106.48,
+    "channels": [
+      15
+    ],
+    "erp": 1000,
+    "radius": 95
+  },
+  {
+    "name": "KCOS",
+    "lat": 31.81,
+    "lng": -106.48,
+    "channels": [
+      13
+    ],
+    "erp": 40,
+    "radius": 85
+  },
+  {
+    "name": "KMID",
+    "lat": 32.09,
+    "lng": -102.26,
+    "channels": [
+      26
+    ],
+    "erp": 1000,
+    "radius": 95
+  },
+  {
+    "name": "KOSA-TV",
+    "lat": 31.88,
+    "lng": -102.83,
+    "channels": [
+      7
+    ],
+    "erp": 35,
+    "radius": 90
+  },
+  {
+    "name": "KWES-TV",
+    "lat": 32.05,
+    "lng": -102.55,
+    "channels": [
+      9
+    ],
+    "erp": 35,
+    "radius": 90
+  },
+  {
+    "name": "KPEJ-TV",
+    "lat": 31.88,
+    "lng": -102.83,
+    "channels": [
+      23
+    ],
+    "erp": 1000,
+    "radius": 95
+  },
+  {
+    "name": "KPBT-TV",
+    "lat": 32.05,
+    "lng": -102.55,
+    "channels": [
+      36
+    ],
+    "erp": 1000,
+    "radius": 95
+  },
+  {
+    "name": "WRC-TV",
+    "lat": 38.96,
+    "lng": -77.08,
+    "channels": [
+      34
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WUSA",
+    "lat": 38.96,
+    "lng": -77.08,
+    "channels": [
+      9
+    ],
+    "erp": 50,
+    "radius": 95
+  },
+  {
+    "name": "WTTG",
+    "lat": 38.96,
+    "lng": -77.08,
+    "channels": [
+      36
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WJLA-TV",
+    "lat": 38.93,
+    "lng": -77.08,
+    "channels": [
+      7
+    ],
+    "erp": 50,
+    "radius": 95
+  },
+  {
+    "name": "WETA-TV",
+    "lat": 38.88,
+    "lng": -77.1,
+    "channels": [
+      31
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WDCW",
+    "lat": 38.96,
+    "lng": -77.08,
+    "channels": [
+      35
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WHUT-TV",
+    "lat": 38.93,
+    "lng": -77.03,
+    "channels": [
+      33
+    ],
+    "erp": 500,
+    "radius": 85
+  },
+  {
+    "name": "WNEP-TV",
+    "lat": 41.18,
+    "lng": -75.87,
+    "channels": [
+      16
+    ],
+    "erp": 1000,
+    "radius": 95
+  },
+  {
+    "name": "WBRE-TV",
+    "lat": 41.18,
+    "lng": -75.87,
+    "channels": [
+      11
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "WYOU",
+    "lat": 41.18,
+    "lng": -75.87,
+    "channels": [
+      12
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "WVIA-TV",
+    "lat": 41.18,
+    "lng": -75.87,
+    "channels": [
+      32
+    ],
+    "erp": 1000,
+    "radius": 95
+  },
+  {
+    "name": "WOLF-TV",
+    "lat": 41.25,
+    "lng": -75.8,
+    "channels": [
+      22
+    ],
+    "erp": 1000,
+    "radius": 95
+  },
+  {
+    "name": "WLBT",
+    "lat": 32.21,
+    "lng": -90.37,
+    "channels": [
+      30
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WJTV",
+    "lat": 32.23,
+    "lng": -90.41,
+    "channels": [
+      12
+    ],
+    "erp": 45,
+    "radius": 95
+  },
+  {
+    "name": "WAPT",
+    "lat": 32.23,
+    "lng": -90.41,
+    "channels": [
+      21
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WDBD",
+    "lat": 32.21,
+    "lng": -90.37,
+    "channels": [
+      14
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WMPN-TV",
+    "lat": 32.28,
+    "lng": -90.11,
+    "channels": [
+      20
+    ],
+    "erp": 500,
+    "radius": 85
+  },
+  {
+    "name": "KAKE",
+    "lat": 37.78,
+    "lng": -97.52,
+    "channels": [
+      10
+    ],
+    "erp": 45,
+    "radius": 95
+  },
+  {
+    "name": "KSNW",
+    "lat": 37.78,
+    "lng": -97.52,
+    "channels": [
+      15
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KWCH-DT",
+    "lat": 38.06,
+    "lng": -97.13,
+    "channels": [
+      19
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KSCW-DT",
+    "lat": 38.06,
+    "lng": -97.13,
+    "channels": [
+      12
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "KPTS",
+    "lat": 37.78,
+    "lng": -97.52,
+    "channels": [
+      8
+    ],
+    "erp": 30,
+    "radius": 85
+  },
+  {
+    "name": "WRAL-TV",
+    "lat": 35.67,
+    "lng": -78.54,
+    "channels": [
+      17
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WTVD",
+    "lat": 35.67,
+    "lng": -78.54,
+    "channels": [
+      9
+    ],
+    "erp": 45,
+    "radius": 95
+  },
+  {
+    "name": "WNCN",
+    "lat": 35.58,
+    "lng": -78.71,
+    "channels": [
+      8
+    ],
+    "erp": 45,
+    "radius": 95
+  },
+  {
+    "name": "WLFL",
+    "lat": 35.67,
+    "lng": -78.54,
+    "channels": [
+      18
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WUNC-TV",
+    "lat": 35.86,
+    "lng": -79.03,
+    "channels": [
+      20
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WOTV",
+    "lat": 42.61,
+    "lng": -85.54,
+    "channels": [
+      17
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WOOD-TV",
+    "lat": 42.68,
+    "lng": -85.54,
+    "channels": [
+      7
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "WZZM",
+    "lat": 43.05,
+    "lng": -85.88,
+    "channels": [
+      13
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "WXMI",
+    "lat": 42.68,
+    "lng": -85.54,
+    "channels": [
+      19
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WGVU-TV",
+    "lat": 42.85,
+    "lng": -85.89,
+    "channels": [
+      11
+    ],
+    "erp": 35,
+    "radius": 85
+  },
+  {
+    "name": "KSDK",
+    "lat": 38.58,
+    "lng": -90.33,
+    "channels": [
+      35
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WTTV",
+    "lat": 39.4,
+    "lng": -86.3,
+    "channels": [
+      27
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WXIN",
+    "lat": 39.9,
+    "lng": -86.2,
+    "channels": [
+      22
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WISH-TV",
+    "lat": 39.9,
+    "lng": -86.2,
+    "channels": [
+      9
+    ],
+    "erp": 35,
+    "radius": 90
+  },
+  {
+    "name": "WRTV",
+    "lat": 39.9,
+    "lng": -86.2,
+    "channels": [
+      25
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KFOR-TV",
+    "lat": 35.55,
+    "lng": -97.48,
+    "channels": [
+      27
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KOCO-TV",
+    "lat": 35.55,
+    "lng": -97.48,
+    "channels": [
+      7
+    ],
+    "erp": 45,
+    "radius": 95
+  },
+  {
+    "name": "KWTV-DT",
+    "lat": 35.55,
+    "lng": -97.48,
+    "channels": [
+      25
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KOKH-TV",
+    "lat": 35.55,
+    "lng": -97.48,
+    "channels": [
+      24
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KETA-TV",
+    "lat": 35.55,
+    "lng": -97.48,
+    "channels": [
+      13
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "WVEC",
+    "lat": 36.81,
+    "lng": -76.47,
+    "channels": [
+      11
+    ],
+    "erp": 45,
+    "radius": 95
+  },
+  {
+    "name": "WAVY-TV",
+    "lat": 36.81,
+    "lng": -76.47,
+    "channels": [
+      19
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WTKR",
+    "lat": 36.81,
+    "lng": -76.47,
+    "channels": [
+      16
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WVBT",
+    "lat": 36.81,
+    "lng": -76.47,
+    "channels": [
+      21
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WHRO-TV",
+    "lat": 36.81,
+    "lng": -76.47,
+    "channels": [
+      31
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WAVE",
+    "lat": 38.37,
+    "lng": -85.83,
+    "channels": [
+      36
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WHAS-TV",
+    "lat": 38.37,
+    "lng": -85.83,
+    "channels": [
+      11
+    ],
+    "erp": 45,
+    "radius": 95
+  },
+  {
+    "name": "WLKY",
+    "lat": 38.37,
+    "lng": -85.83,
+    "channels": [
+      14
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WDRB",
+    "lat": 38.37,
+    "lng": -85.83,
+    "channels": [
+      32
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WKPC-TV",
+    "lat": 38.37,
+    "lng": -85.83,
+    "channels": [
+      30
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WTVF",
+    "lat": 36.14,
+    "lng": -86.79,
+    "channels": [
+      36
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WSMV-TV",
+    "lat": 36.14,
+    "lng": -86.79,
+    "channels": [
+      10
+    ],
+    "erp": 45,
+    "radius": 95
+  },
+  {
+    "name": "WKRN-TV",
+    "lat": 36.14,
+    "lng": -86.79,
+    "channels": [
+      27
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WZTV",
+    "lat": 36.14,
+    "lng": -86.79,
+    "channels": [
+      15
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WNPT",
+    "lat": 36.14,
+    "lng": -86.79,
+    "channels": [
+      8
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "KMBC-TV",
+    "lat": 39.01,
+    "lng": -94.51,
+    "channels": [
+      29
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WDAF-TV",
+    "lat": 39.01,
+    "lng": -94.51,
+    "channels": [
+      34
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KCTV",
+    "lat": 39.01,
+    "lng": -94.51,
+    "channels": [
+      24
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KSHB-TV",
+    "lat": 39.01,
+    "lng": -94.51,
+    "channels": [
+      36
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KCPT",
+    "lat": 39.01,
+    "lng": -94.51,
+    "channels": [
+      18
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WBNS-TV",
+    "lat": 39.93,
+    "lng": -83.02,
+    "channels": [
+      21
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WCMH-TV",
+    "lat": 39.93,
+    "lng": -83.02,
+    "channels": [
+      14
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WSYX",
+    "lat": 39.93,
+    "lng": -83.02,
+    "channels": [
+      28
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WTTE",
+    "lat": 39.93,
+    "lng": -83.02,
+    "channels": [
+      27
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WOSU-TV",
+    "lat": 39.93,
+    "lng": -83.02,
+    "channels": [
+      16
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KUTV",
+    "lat": 40.66,
+    "lng": -112.2,
+    "channels": [
+      34
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KTVX",
+    "lat": 40.66,
+    "lng": -112.2,
+    "channels": [
+      30
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KSL-TV",
+    "lat": 40.66,
+    "lng": -112.2,
+    "channels": [
+      23
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KSTU",
+    "lat": 40.66,
+    "lng": -112.2,
+    "channels": [
+      28
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KUED",
+    "lat": 40.66,
+    "lng": -112.2,
+    "channels": [
+      27
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WITI",
+    "lat": 43.09,
+    "lng": -87.88,
+    "channels": [
+      31
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WTMJ-TV",
+    "lat": 43.09,
+    "lng": -87.88,
+    "channels": [
+      32
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WISN-TV",
+    "lat": 43.09,
+    "lng": -87.88,
+    "channels": [
+      28
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WVST-TV",
+    "lat": 43.09,
+    "lng": -87.88,
+    "channels": [
+      18
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WMVS",
+    "lat": 43.09,
+    "lng": -87.88,
+    "channels": [
+      8
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "KENS",
+    "lat": 29.27,
+    "lng": -98.13,
+    "channels": [
+      29
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WOAI-TV",
+    "lat": 29.27,
+    "lng": -98.13,
+    "channels": [
+      28
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KSAT-TV",
+    "lat": 29.27,
+    "lng": -98.13,
+    "channels": [
+      12
+    ],
+    "erp": 45,
+    "radius": 95
+  },
+  {
+    "name": "KABB",
+    "lat": 29.27,
+    "lng": -98.13,
+    "channels": [
+      30
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KLRN",
+    "lat": 29.27,
+    "lng": -98.13,
+    "channels": [
+      9
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "WPTV-TV",
+    "lat": 26.58,
+    "lng": -80.17,
+    "channels": [
+      12
+    ],
+    "erp": 45,
+    "radius": 95
+  },
+  {
+    "name": "WPEC",
+    "lat": 26.58,
+    "lng": -80.17,
+    "channels": [
+      13
+    ],
+    "erp": 45,
+    "radius": 95
+  },
+  {
+    "name": "WPBF",
+    "lat": 26.93,
+    "lng": -80.18,
+    "channels": [
+      16
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WFLX",
+    "lat": 26.93,
+    "lng": -80.18,
+    "channels": [
+      35
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WXEL-TV",
+    "lat": 26.58,
+    "lng": -80.17,
+    "channels": [
+      29
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WTHR",
+    "lat": 39.9,
+    "lng": -86.2,
+    "channels": [
+      13
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "WISH-TV",
+    "lat": 39.9,
+    "lng": -86.2,
+    "channels": [
+      9
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "WRTV",
+    "lat": 39.9,
+    "lng": -86.2,
+    "channels": [
+      25
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WXIN",
+    "lat": 39.9,
+    "lng": -86.2,
+    "channels": [
+      22
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WFYI",
+    "lat": 39.9,
+    "lng": -86.2,
+    "channels": [
+      21
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KATU",
+    "lat": 45.49,
+    "lng": -122.74,
+    "channels": [
+      24
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KGW",
+    "lat": 45.49,
+    "lng": -122.74,
+    "channels": [
+      26
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KOIN",
+    "lat": 45.49,
+    "lng": -122.74,
+    "channels": [
+      25
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KPTV",
+    "lat": 45.49,
+    "lng": -122.74,
+    "channels": [
+      12
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "KOPB-TV",
+    "lat": 45.49,
+    "lng": -122.74,
+    "channels": [
+      10
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "WOOD-TV",
+    "lat": 42.68,
+    "lng": -85.54,
+    "channels": [
+      7
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "WZZM",
+    "lat": 43.05,
+    "lng": -85.88,
+    "channels": [
+      13
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "WXMI",
+    "lat": 42.68,
+    "lng": -85.54,
+    "channels": [
+      19
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WOTV",
+    "lat": 42.61,
+    "lng": -85.54,
+    "channels": [
+      17
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WGVU-TV",
+    "lat": 42.85,
+    "lng": -85.89,
+    "channels": [
+      11
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "WSOC-TV",
+    "lat": 35.29,
+    "lng": -80.68,
+    "channels": [
+      19
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WBTV",
+    "lat": 35.36,
+    "lng": -81.15,
+    "channels": [
+      23
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WCNC-TV",
+    "lat": 35.36,
+    "lng": -81.15,
+    "channels": [
+      24
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WJZY",
+    "lat": 35.36,
+    "lng": -81.15,
+    "channels": [
+      25
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WTVI",
+    "lat": 35.29,
+    "lng": -80.68,
+    "channels": [
+      11
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "WDIV-TV",
+    "lat": 42.41,
+    "lng": -83.18,
+    "channels": [
+      32
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WJBK",
+    "lat": 42.41,
+    "lng": -83.18,
+    "channels": [
+      7
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "WXYZ-TV",
+    "lat": 42.41,
+    "lng": -83.18,
+    "channels": [
+      25
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WWJ-TV",
+    "lat": 42.41,
+    "lng": -83.18,
+    "channels": [
+      21
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WTVS",
+    "lat": 42.41,
+    "lng": -83.18,
+    "channels": [
+      20
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WBAL-TV",
+    "lat": 39.33,
+    "lng": -76.65,
+    "channels": [
+      12
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "WJZ-TV",
+    "lat": 39.33,
+    "lng": -76.65,
+    "channels": [
+      11
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "WMAR-TV",
+    "lat": 39.33,
+    "lng": -76.65,
+    "channels": [
+      27
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WBFF",
+    "lat": 39.33,
+    "lng": -76.65,
+    "channels": [
+      26
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WMPT",
+    "lat": 39.33,
+    "lng": -76.65,
+    "channels": [
+      22
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KARE",
+    "lat": 45.05,
+    "lng": -93.13,
+    "channels": [
+      11
+    ],
+    "erp": 45,
+    "radius": 95
+  },
+  {
+    "name": "WCCO-TV",
+    "lat": 45.05,
+    "lng": -93.13,
+    "channels": [
+      32
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KSTP-TV",
+    "lat": 45.05,
+    "lng": -93.13,
+    "channels": [
+      35
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KMSP-TV",
+    "lat": 45.05,
+    "lng": -93.13,
+    "channels": [
+      9
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "KTCA-TV",
+    "lat": 45.05,
+    "lng": -93.13,
+    "channels": [
+      34
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WJW",
+    "lat": 41.38,
+    "lng": -81.69,
+    "channels": [
+      8
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "WKYC",
+    "lat": 41.38,
+    "lng": -81.69,
+    "channels": [
+      19
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WEWS-TV",
+    "lat": 41.38,
+    "lng": -81.69,
+    "channels": [
+      15
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WVIZ",
+    "lat": 41.38,
+    "lng": -81.69,
+    "channels": [
+      35
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WOIO",
+    "lat": 41.38,
+    "lng": -81.69,
+    "channels": [
+      10
+    ],
+    "erp": 35,
+    "radius": 85
+  },
+  {
+    "name": "KMOV",
+    "lat": 38.58,
+    "lng": -90.33,
+    "channels": [
+      24
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KSDK",
+    "lat": 38.58,
+    "lng": -90.33,
+    "channels": [
+      35
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KTVI",
+    "lat": 38.58,
+    "lng": -90.33,
+    "channels": [
+      33
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KPLR-TV",
+    "lat": 38.58,
+    "lng": -90.33,
+    "channels": [
+      26
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KETC",
+    "lat": 38.58,
+    "lng": -90.33,
+    "channels": [
+      23
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WFTV",
+    "lat": 28.56,
+    "lng": -81.08,
+    "channels": [
+      33
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WESH",
+    "lat": 28.91,
+    "lng": -81.31,
+    "channels": [
+      11
+    ],
+    "erp": 45,
+    "radius": 95
+  },
+  {
+    "name": "WKMG-TV",
+    "lat": 28.6,
+    "lng": -81.08,
+    "channels": [
+      26
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WOFL",
+    "lat": 28.56,
+    "lng": -81.08,
+    "channels": [
+      33
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WUCF-TV",
+    "lat": 28.6,
+    "lng": -81.08,
+    "channels": [
+      23
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WCVB-TV",
+    "lat": 42.3,
+    "lng": -71.22,
+    "channels": [
+      33
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WBZ-TV",
+    "lat": 42.3,
+    "lng": -71.22,
+    "channels": [
+      20
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WHDH",
+    "lat": 42.34,
+    "lng": -71.21,
+    "channels": [
+      35
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WGBH-TV",
+    "lat": 42.34,
+    "lng": -71.21,
+    "channels": [
+      5
+    ],
+    "erp": 15,
+    "radius": 80
+  },
+  {
+    "name": "WFXT",
+    "lat": 42.22,
+    "lng": -71.22,
+    "channels": [
+      34
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KING-TV",
+    "lat": 47.63,
+    "lng": -122.35,
+    "channels": [
+      25
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KIRO-TV",
+    "lat": 47.63,
+    "lng": -122.35,
+    "channels": [
+      23
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KOMO-TV",
+    "lat": 47.63,
+    "lng": -122.35,
+    "channels": [
+      30
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KCPQ",
+    "lat": 47.54,
+    "lng": -122.74,
+    "channels": [
+      13
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "KWPX-TV",
+    "lat": 47.6,
+    "lng": -122.33,
+    "channels": [
+      33
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KUSA",
+    "lat": 39.73,
+    "lng": -105.23,
+    "channels": [
+      9
+    ],
+    "erp": 40,
+    "radius": 90
+  },
+  {
+    "name": "KCNC-TV",
+    "lat": 39.73,
+    "lng": -105.23,
+    "channels": [
+      35
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KMGH-TV",
+    "lat": 39.73,
+    "lng": -105.23,
+    "channels": [
+      7
+    ],
+    "erp": 30,
+    "radius": 85
+  },
+  {
+    "name": "KDVR",
+    "lat": 39.73,
+    "lng": -105.23,
+    "channels": [
+      32
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KRMA-TV",
+    "lat": 39.73,
+    "lng": -105.23,
+    "channels": [
+      18
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WAGA-TV",
+    "lat": 33.74,
+    "lng": -84.32,
+    "channels": [
+      27
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WSB-TV",
+    "lat": 33.75,
+    "lng": -84.32,
+    "channels": [
+      32
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WXIA-TV",
+    "lat": 33.75,
+    "lng": -84.32,
+    "channels": [
+      10
+    ],
+    "erp": 50,
+    "radius": 95
+  },
+  {
+    "name": "WGCL-TV",
+    "lat": 33.75,
+    "lng": -84.32,
+    "channels": [
+      19
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WUPA",
+    "lat": 33.75,
+    "lng": -84.32,
+    "channels": [
+      36
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WFUT-DT (Ch 14)",
+    "lat": 40.7484,
+    "lng": -73.9857,
+    "channels": [
+      14
+    ],
+    "erp": 500,
+    "radius": 95
+  },
+  {
+    "name": "WPXN-DT (Ch 15)",
+    "lat": 40.7484,
+    "lng": -73.9857,
+    "channels": [
+      15
+    ],
+    "erp": 670,
+    "radius": 95
+  },
+  {
+    "name": "WNJU-DT (Ch 14)",
+    "lat": 40.7127,
+    "lng": -74.0059,
+    "channels": [
+      14
+    ],
+    "erp": 590,
+    "radius": 95
+  },
+  {
+    "name": "WNJW-DT (Ch 16)",
+    "lat": 40.7484,
+    "lng": -73.9857,
+    "channels": [
+      16
+    ],
+    "erp": 510,
+    "radius": 95
+  },
+  {
+    "name": "WABC-DT (Ch 20)",
+    "lat": 40.7484,
+    "lng": -73.9857,
+    "channels": [
+      20
+    ],
+    "erp": 450,
+    "radius": 90
+  },
+  {
+    "name": "KBEH (Ch 14)",
+    "lat": 34.2267,
+    "lng": -118.0683,
+    "channels": [
+      14
+    ],
+    "erp": 480,
+    "radius": 100
+  },
+  {
+    "name": "KWHY-TV (Ch 20)",
+    "lat": 34.2267,
+    "lng": -118.0683,
+    "channels": [
+      20
+    ],
+    "erp": 420,
+    "radius": 100
+  },
+  {
+    "name": "KPXN-TV (Ch 15)",
+    "lat": 34.2267,
+    "lng": -118.0683,
+    "channels": [
+      15
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WGN-TV (Ch 19)",
+    "lat": 41.8817,
+    "lng": -87.6272,
+    "channels": [
+      19
+    ],
+    "erp": 650,
+    "radius": 95
+  },
+  {
+    "name": "WTTW (Ch 20)",
+    "lat": 41.8817,
+    "lng": -87.6272,
+    "channels": [
+      20
+    ],
+    "erp": 500,
+    "radius": 95
+  },
+  {
+    "name": "KUHT (Ch 14)",
+    "lat": 29.7604,
+    "lng": -95.3698,
+    "channels": [
+      14
+    ],
+    "erp": 500,
+    "radius": 90
+  },
+  {
+    "name": "KRIV (Ch 16)",
+    "lat": 29.7604,
+    "lng": -95.3698,
+    "channels": [
+      16
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KPHO-TV (Ch 17)",
+    "lat": 33.4484,
+    "lng": -112.074,
+    "channels": [
+      17
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "WCAU (Ch 14)",
+    "lat": 39.9526,
+    "lng": -75.1652,
+    "channels": [
+      14
+    ],
+    "erp": 700,
+    "radius": 95
+  },
+  {
+    "name": "KDFW (Ch 14)",
+    "lat": 32.7767,
+    "lng": -96.797,
+    "channels": [
+      14
+    ],
+    "erp": 1000,
+    "radius": 100
+  },
+  {
+    "name": "KXAS-TV (Ch 15)",
+    "lat": 32.7767,
+    "lng": -96.797,
+    "channels": [
+      15
+    ],
+    "erp": 1000,
+    "radius": 100
+  }
+]

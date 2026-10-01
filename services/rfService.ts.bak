@@ -1,0 +1,3143 @@
+
+import { 
+    Frequency, Thresholds, AnalysisResult, Conflict, Scene, 
+    FestivalAct, ConstantSystemRequest, ZoneConfig, EquipmentProfile, 
+    TxType, CompatibilityLevel, ZonalResult, DuplexPair, IntermodProduct,
+    GeneratorRequest, EquipmentRequest, TalkbackIntermods, Zone,
+    OptimizationReport, OptimizationSuggestion, BottleneckStats, TVChannelState, TalkbackMode, TourPlanningState, WMASState
+} from '../types';
+import { COMPATIBILITY_PROFILES, DISCRETE_TALKBACK_PAIRS, TALKBACK_DEFINITIONS, TALKBACK_FIXED_PAIRS, UK_TV_CHANNELS, US_TV_CHANNELS, TALKBACK_FORBIDDEN_RANGES_BY_COUNTRY } from '../constants';
+
+export const ensureValidDate = (d: any): Date => { const parsed = new Date(d); return isNaN(parsed.getTime()) ? new Date() : parsed; };
+
+/**
+ * AUTHORITATIVE PRECISION UTILS
+ */
+export const toHz = (mhz: number) => Math.round(mhz * 1000000);
+
+const shuffleArray = <T>(array: T[]): T[] => {
+    const arr = [...array];
+    for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+};
+
+const FESTIVAL_SPATIAL_IMD_LIMIT = 10;
+const FESTIVAL_SPATIAL_FF_LIMIT = 500;
+const FESTIVAL_MAX_IMD3_SPREAD_HZ = 200000000; // Increased to 200MHz to cover wider interactions in high-power settings
+const FESTIVAL_MAX_IMD2_SPREAD_HZ = 200000000; // Increased to 200MHz
+
+const getDistanceWeightedFundamental = (distance: number): number => {
+    if (distance >= 500) return 0.000;
+    if (distance >= 400) return 0.050;
+    if (distance >= 320) return 0.100;
+    if (distance >= 220) return 0.125;
+    if (distance >= 70)  return 0.150;
+    if (distance >= 25)  return 0.175;
+    if (distance >= 2)   return 0.200;
+    return 0.350; 
+};
+
+export interface CoordinationDiagnostic {
+    isHealthy: boolean;
+    found: number;
+    requested: number;
+    efficiency: number;
+    warnings: string[];
+    suggestions: string[];
+}
+
+export const getCoordinationDiagnostics = (
+    totalRequested: number,
+    totalFound: number,
+    minFreq: number,
+    maxFreq: number,
+    exclusions: { min: number, max: number }[],
+    thresholds: Thresholds
+): CoordinationDiagnostic => {
+    const efficiency = totalRequested > 0 ? Math.round((totalFound / totalRequested) * 100) : 100;
+    const warnings: string[] = [];
+    const suggestions: string[] = [];
+
+    if (totalFound < totalRequested) {
+        warnings.push(`Coordination shortfall: ${totalRequested - totalFound} carriers could not be placed.`);
+        suggestions.push("Check for localized TV channel interference or high-power talkback blockades.");
+        suggestions.push("Try reducing IMD spacing to 'Aggressive' for the affected equipment groups.");
+    }
+
+    if (efficiency < 100 && efficiency > 0) {
+        suggestions.push("Consider using Linear/Digital mode for Axient Digital or D6000 systems to ignore IMD.");
+    }
+
+    return {
+        isHealthy: totalFound >= totalRequested,
+        found: totalFound,
+        requested: totalRequested,
+        efficiency,
+        warnings,
+        suggestions
+    };
+};
+
+const getCandidates = (min: number, max: number, step: number, exclusions: {min: number, max: number}[], inclusions: {min: number, max: number}[] | null): number[] => {
+    const pool: number[] = [];
+    const minHz = toHz(min);
+    const maxHz = toHz(max);
+    const stepHz = toHz(step || 0.025);
+
+    for (let currentHz = minHz; currentHz <= maxHz; currentHz += stepHz) {
+        const v = currentHz / 1000000;
+        // Hard exclusion zone above 1164 MHz limit
+        if (v > 1164.000) continue;
+        if (exclusions.some(e => v >= (e.min - 0.0001) && v <= (e.max + 0.0001))) continue;
+        if (inclusions && inclusions.length > 0 && !inclusions.some(i => v >= (i.min - 0.0001) && (i.max + 0.0001) >= v)) continue;
+        pool.push(v);
+    }
+    return pool;
+};
+
+/**
+ * ENGINE 1: TALKBACK SPECIALIZED PHYSICS (NARROWBAND)
+ */
+const isTalkbackCompatibleMutual = (
+    candidateValue: number,
+    pool: (Frequency & { isTx?: boolean })[],
+    distances: number[][],
+    candidateZoneIdx: number,
+    matrix: boolean[][],
+    isCandidateTx: boolean = false
+): { conflicts: Conflict[] } => {
+    const conflicts: Conflict[] = [];
+    const candHz = toHz(candidateValue);
+    const targetFreq = { id: 'candidate', value: candidateValue, type: 'comms' as TxType, isTx: isCandidateTx, zoneIndex: candidateZoneIdx };
+    
+    // Increased thresholds for Talkback to be more conservative and catch near-misses
+    const FF_HZ = toHz(0.025);
+    const IMD_HZ = toHz(0.0125);
+
+    const poolWithMeta = pool.map(f => ({
+        ...f,
+        hz: toHz(f.value),
+        zIdx: f.zoneIndex ?? 0,
+        original: f
+    }));
+
+    const checkInteracts = (z1: number, z2: number) => {
+        if (z1 < 0 || z2 < 0) return true;
+        const d = distances[z1]?.[z2];
+        const m = matrix?.[z1]?.[z2];
+        if (d === undefined) return true;
+        return d < 25 || m === true;
+    };
+
+    // 1. Fundamental Clashes (Candidate vs Pool)
+    for (const f of poolWithMeta) {
+        const diff = Math.abs(candHz - f.hz);
+        if (diff < FF_HZ) {
+            conflicts.push({ 
+                type: 'Talkback Fundamental Clash', 
+                product: f.value, 
+                sourceFreqs: [f.original], 
+                targetFreq, 
+                diff: diff / 1000000 
+            });
+            return { conflicts };
+        }
+    }
+
+    // 2. IMD Checks
+    const txPool = poolWithMeta.filter(f => f.isTx);
+    const fullTxPool = isCandidateTx ? [...txPool, { hz: candHz, zIdx: candidateZoneIdx, original: targetFreq }] : txPool;
+    const fullVictimPool = [...poolWithMeta, { hz: candHz, zIdx: candidateZoneIdx, original: targetFreq }];
+
+    // 2-Tone IMD: 2*f1 - f2
+    for (let i = 0; i < fullTxPool.length; i++) {
+        const f1 = fullTxPool[i];
+        for (let j = 0; j < fullTxPool.length; j++) {
+            if (i === j) continue;
+            const f2 = fullTxPool[j];
+            const p2 = 2 * f1.hz - f2.hz;
+            
+            for (const v of fullVictimPool) {
+                if (checkInteracts(f1.zIdx, v.zIdx) && checkInteracts(f2.zIdx, v.zIdx)) {
+                    if (Math.abs(v.hz - p2) < IMD_HZ) {
+                        conflicts.push({ 
+                            type: 'Talkback 2-Tone IMD', 
+                            product: p2 / 1000000, 
+                            sourceFreqs: [f1.original, f2.original], 
+                            targetFreq: v.original, 
+                            diff: Math.abs(v.hz - p2) / 1000000 
+                        });
+                        return { conflicts };
+                    }
+                }
+            }
+        }
+    }
+
+    // 3-Tone IMD: f1 + f2 - f3
+    for (let i = 0; i < fullTxPool.length; i++) {
+        const f1 = fullTxPool[i];
+        for (let j = i + 1; j < fullTxPool.length; j++) {
+            const f2 = fullTxPool[j];
+            for (let k = j + 1; k < fullTxPool.length; k++) {
+                const f3 = fullTxPool[k];
+                
+                const p3s = [
+                    { val: f1.hz + f2.hz - f3.hz, sources: [f1, f2, f3] },
+                    { val: f1.hz + f3.hz - f2.hz, sources: [f1, f3, f2] },
+                    { val: f2.hz + f3.hz - f1.hz, sources: [f2, f3, f1] }
+                ];
+                
+                for (const p of p3s) {
+                    for (const v of fullVictimPool) {
+                        if (checkInteracts(f1.zIdx, v.zIdx) && checkInteracts(f2.zIdx, v.zIdx) && checkInteracts(f3.zIdx, v.zIdx)) {
+                            if (Math.abs(v.hz - p.val) < IMD_HZ) {
+                                conflicts.push({ 
+                                    type: 'Talkback 3-Tone IMD', 
+                                    product: p.val / 1000000, 
+                                    sourceFreqs: p.sources.map(s => s.original), 
+                                    targetFreq: v.original, 
+                                    diff: Math.abs(v.hz - p.val) / 1000000 
+                                });
+                                return { conflicts };
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return { conflicts };
+};
+
+/**
+ * ENGINE 2: BROADSIDE PHYSICS (MICS/IEMS/GENERIC)
+ */
+const isExhaustiveCompatibleMutual = (
+    candidateValue: number, 
+    candidateTh: Thresholds, 
+    candidateZoneIdx: number,
+    pool: Frequency[], 
+    distances: number[][],
+    db: Record<string, EquipmentProfile>,
+    globalOverrides?: Record<string, Partial<Thresholds>>,
+    imdLimit: number = FESTIVAL_SPATIAL_IMD_LIMIT,
+    candidateLinearMode: boolean = false,
+    matrix?: boolean[][],
+    distanceWeightingEnabled: boolean = true
+): { conflicts: Conflict[], reason?: 'fundamental' | 'imd2' | 'imd3' | 'imd5' | 'imd7' } => {
+    const conflicts: Conflict[] = [];
+    if (candidateValue <= 0) return { conflicts };
+    
+    const candidateHz = toHz(candidateValue);
+    const targetFreq: Frequency = { 
+        id: 'candidate', 
+        value: candidateValue, 
+        manualThresholds: candidateTh, 
+        zoneIndex: candidateZoneIdx, 
+        linearMode: candidateLinearMode 
+    };
+
+    const poolWithTh = pool.map(f => ({
+        ...f,
+        hz: toHz(f.value),
+        th: f.manualThresholds || getFinalThresholds(f, db, globalOverrides),
+        zoneIdx: f.zoneIndex ?? -1,
+        isDigital: !!f.linearMode,
+        ignoreImd: !!f._ignoreImdWithCandidate,
+        isConsecutive: !!f._isConsecutive
+    }));
+
+    // OPTIMIZATION: Pre-filter pool to only include frequencies that could spatially interact with the candidate
+    // Fundamental or IMD interactions generally only occur if zones are linked or close.
+    const interactionPool = poolWithTh.filter(f => {
+        const isGlobal = candidateZoneIdx < 0 || f.zoneIdx < 0;
+        if (isGlobal) return true;
+        const d = distances[candidateZoneIdx]?.[f.zoneIdx];
+        if (d === undefined) return true; // Default to interaction if distance unknown for safety
+        const interaction = d < FESTIVAL_SPATIAL_FF_LIMIT || (matrix && matrix[candidateZoneIdx]?.[f.zoneIdx]);
+        return interaction;
+    });
+
+    // 1. FUNDAMENTAL CHECK (SYMMETRICAL)
+    for (const f1 of interactionPool) {
+        // Always enforce distance-based threshold if we have distance data, 
+        // to prevent linked stages from ignoring physical separation rules.
+        const dist_C1 = (candidateZoneIdx < 0 || f1.zoneIdx < 0) ? 0 : (distances[candidateZoneIdx]?.[f1.zoneIdx] ?? 0);
+        const isManuallyLinked = (candidateZoneIdx < 0 || f1.zoneIdx < 0) ? true : (matrix && matrix[candidateZoneIdx]?.[f1.zoneIdx]);
+
+        if (dist_C1 < FESTIVAL_SPATIAL_FF_LIMIT || isManuallyLinked) {
+            const baseTh = Math.max(candidateTh.fundamental, f1.th.fundamental);
+            
+            // Use weighted distance rule if physical distance is known (> 0)
+            let effectiveTh = baseTh;
+            if (dist_C1 > 0 && distanceWeightingEnabled) {
+                effectiveTh = Math.min(baseTh, getDistanceWeightedFundamental(dist_C1));
+            }
+
+            // Enforce minimum 250kHz spacing for consecutive acts regardless of distance
+            if (f1.isConsecutive) {
+                effectiveTh = Math.max(effectiveTh, 0.250);
+            }
+            
+            const mutualFF_Hz = Math.max(1, toHz(effectiveTh));
+            const fontDiffHz = Math.abs(candidateHz - f1.hz);
+            if (fontDiffHz < mutualFF_Hz) {
+                conflicts.push({ type: 'Fundamental', product: f1.value, sourceFreqs: [f1], targetFreq, diff: fontDiffHz / 1000000 });
+                return { conflicts, reason: 'fundamental' };
+            }
+        }
+    }
+
+    // 2. IMD CHECK (TWO-WAY SYMMETRICAL WITH 10M CLUSTER RULE)
+    const candTwoToneThHz = candidateLinearMode ? 0 : toHz(candidateTh.twoTone);
+    const candThreeToneThHz = candidateLinearMode ? 0 : toHz(candidateTh.threeTone);
+    const candFiveToneThHz = candidateLinearMode ? 0 : toHz(candidateTh.fiveTone || 0);
+    const candSevenToneThHz = candidateLinearMode ? 0 : toHz(candidateTh.sevenTone || 0);
+
+    // Only run IMD if candidate or pool has analog carriers
+    const hasAnalog = !candidateLinearMode || interactionPool.some(f => !f.isDigital);
+    if (!hasAnalog) return { conflicts };
+
+    for (let i = 0; i < interactionPool.length; i++) {
+        const f1 = interactionPool[i];
+
+        for (let j = 0; j < interactionPool.length; j++) {
+            if (i === j) continue;
+            const f2 = interactionPool[j];
+            
+            if (f1.ignoreImd || f2.ignoreImd) continue;
+
+            // --- A. CANDIDATE AS VICTIM (Sources f1 and f2) ---
+            const isGlobal_12 = f1.zoneIdx < 0 || f2.zoneIdx < 0 || candidateZoneIdx < 0;
+            const dist_C1 = isGlobal_12 ? 0 : (distances[candidateZoneIdx]?.[f1.zoneIdx] ?? 0);
+            const dist_C2 = isGlobal_12 ? 0 : (distances[candidateZoneIdx]?.[f2.zoneIdx] ?? 0);
+            const dist_12 = isGlobal_12 ? 0 : (distances[f1.zoneIdx]?.[f2.zoneIdx] ?? 0);
+            
+            // IMD Logic: Only same stage or very close (< 25m) or manually linked
+            const linked_12 = isGlobal_12 || (
+                               (f1.zoneIdx === f2.zoneIdx || dist_12 < 25 || (matrix && matrix[f1.zoneIdx]?.[f2.zoneIdx])) &&
+                               (candidateZoneIdx === f1.zoneIdx || dist_C1 < 25 || (matrix && matrix[candidateZoneIdx]?.[f1.zoneIdx])) &&
+                               (candidateZoneIdx === f2.zoneIdx || dist_C2 < 25 || (matrix && matrix[candidateZoneIdx]?.[f2.zoneIdx]))
+                              );
+            
+            if (linked_12) {
+                // SPREAD CHECK: If sources are too far apart, the generated IMD is usually negligible
+                const spread12 = Math.abs(f1.hz - f2.hz);
+                const isSpreadValid2 = spread12 <= FESTIVAL_MAX_IMD2_SPREAD_HZ;
+
+                // 3rd Order: 2*f1 - f2
+                if (isSpreadValid2 && candTwoToneThHz > 0 && !(candidateLinearMode && f1.isDigital && f2.isDigital)) {
+                    const p2 = 2 * f1.hz - f2.hz;
+                    const diffHz = Math.abs(candidateHz - p2);
+                    if (diffHz < candTwoToneThHz) {
+                        conflicts.push({ type: '2-Tone IMD (Victim)', product: p2 / 1000000, sourceFreqs: [f1, f2], targetFreq, diff: diffHz / 1000000 });
+                        return { conflicts, reason: 'imd2' };
+                    }
+                }
+                
+                // 5th Order: 3*f1 - 2*f2
+                if (candFiveToneThHz > 0 && !(candidateLinearMode && f1.isDigital && f2.isDigital)) {
+                    const p5 = 3 * f1.hz - 2 * f2.hz;
+                    const diffHz5 = Math.abs(candidateHz - p5);
+                    if (diffHz5 < candFiveToneThHz) {
+                        conflicts.push({ type: '2-Tone 5th Order IMD (Victim)', product: p5 / 1000000, sourceFreqs: [f1, f2], targetFreq, diff: diffHz5 / 1000000 });
+                        return { conflicts, reason: 'imd5' };
+                    }
+                }
+
+                // 7th Order: 4*f1 - 3*f2
+                if (candSevenToneThHz > 0 && !(candidateLinearMode && f1.isDigital && f2.isDigital)) {
+                    const p7 = 4 * f1.hz - 3 * f2.hz;
+                    const diffHz7 = Math.abs(candidateHz - p7);
+                    if (diffHz7 < candSevenToneThHz) {
+                        conflicts.push({ type: '2-Tone 7th Order IMD (Victim)', product: p7 / 1000000, sourceFreqs: [f1, f2], targetFreq, diff: diffHz7 / 1000000 });
+                        return { conflicts, reason: 'imd7' };
+                    }
+                }
+            }
+
+            // --- B. CANDIDATE AS AGGRESSOR (Cand and f1 hit Victim f2) ---
+            const isGlobal_C1 = candidateZoneIdx < 0 || f1.zoneIdx < 0 || f2.zoneIdx < 0;
+            const dist_C1_B = isGlobal_C1 ? 0 : (distances[candidateZoneIdx]?.[f1.zoneIdx] ?? 0);
+            const dist_C2_B = isGlobal_C1 ? 0 : (distances[candidateZoneIdx]?.[f2.zoneIdx] ?? 0);
+            const dist_12_B = isGlobal_C1 ? 0 : (distances[f1.zoneIdx]?.[f2.zoneIdx] ?? 0);
+
+            const linked_C1 = isGlobal_C1 || (
+                               (candidateZoneIdx === f1.zoneIdx || dist_C1_B < 25 || (matrix && matrix[candidateZoneIdx]?.[f1.zoneIdx])) &&
+                               (candidateZoneIdx === f2.zoneIdx || dist_C2_B < 25 || (matrix && matrix[candidateZoneIdx]?.[f2.zoneIdx])) &&
+                               (f1.zoneIdx === f2.zoneIdx || dist_12_B < 25 || (matrix && matrix[f1.zoneIdx]?.[f2.zoneIdx]))
+                              );
+
+            if (linked_C1) {
+                const spreadC1 = Math.abs(candidateHz - f1.hz);
+                const isSpreadValidC1 = spreadC1 <= FESTIVAL_MAX_IMD2_SPREAD_HZ;
+
+                const f2TwoToneThHz = f2.isDigital ? 0 : toHz(f2.th.twoTone);
+                const f2FiveToneThHz = f2.isDigital ? 0 : toHz(f2.th.fiveTone || 0);
+                const f2SevenToneThHz = f2.isDigital ? 0 : toHz(f2.th.sevenTone || 0);
+
+                if (isSpreadValidC1 && f2TwoToneThHz > 0 && !(f2.isDigital && candidateLinearMode && f1.isDigital)) {
+                    const pA = 2 * candidateHz - f1.hz;
+                    const diffHzA = Math.abs(f2.hz - pA);
+                    if (diffHzA < f2TwoToneThHz) {
+                        conflicts.push({ type: '2-Tone IMD (Aggressor)', product: pA / 1000000, sourceFreqs: [targetFreq, f1], targetFreq: f2, diff: diffHzA / 1000000 });
+                        return { conflicts, reason: 'imd2' };
+                    }
+                    const pB = 2 * f1.hz - candidateHz;
+                    const diffHzB = Math.abs(f2.hz - pB);
+                    if (diffHzB < f2TwoToneThHz) {
+                        conflicts.push({ type: '2-Tone IMD (Aggressor)', product: pB / 1000000, sourceFreqs: [f1, targetFreq], targetFreq: f2, diff: diffHzB / 1000000 });
+                        return { conflicts, reason: 'imd2' };
+                    }
+                }
+
+                // 5th Order Aggressor
+                if (f2FiveToneThHz > 0 && !(f2.isDigital && candidateLinearMode && f1.isDigital)) {
+                    const pairs5 = [
+                        { p: 3 * candidateHz - 2 * f1.hz, s: [targetFreq, f1] },
+                        { p: 3 * f1.hz - 2 * candidateHz, s: [f1, targetFreq] }
+                    ];
+                    for (const pair of pairs5) {
+                        const diff = Math.abs(f2.hz - pair.p);
+                        if (diff < f2FiveToneThHz) {
+                            conflicts.push({ type: '2-Tone 5th Order IMD (Aggressor)', product: pair.p / 1000000, sourceFreqs: pair.s, targetFreq: f2, diff: diff / 1000000 });
+                            return { conflicts, reason: 'imd5' };
+                        }
+                    }
+                }
+
+                // 7th Order Aggressor
+                if (f2SevenToneThHz > 0 && !(f2.isDigital && candidateLinearMode && f1.isDigital)) {
+                    const pairs7 = [
+                        { p: 4 * candidateHz - 3 * f1.hz, s: [targetFreq, f1] },
+                        { p: 4 * f1.hz - 3 * candidateHz, s: [f1, targetFreq] }
+                    ];
+                    for (const pair of pairs7) {
+                        const diff = Math.abs(f2.hz - pair.p);
+                        if (diff < f2SevenToneThHz) {
+                            conflicts.push({ type: '2-Tone 7th Order IMD (Aggressor)', product: pair.p / 1000000, sourceFreqs: pair.s, targetFreq: f2, diff: diff / 1000000 });
+                            return { conflicts, reason: 'imd7' };
+                        }
+                    }
+                }
+            }
+
+            // --- 3-TONE ANALYSIS (STRICT 10M CLUSTER RULE) ---
+            // Only search for 3-tone hits if threshold is > 0
+            const needs3Tone = candThreeToneThHz > 0 || interactionPool.some(f => !f.isDigital && (f.th.threeTone > 0));
+            if (!needs3Tone) continue;
+
+            for (let k = 0; k < interactionPool.length; k++) {
+                if (k === i || k === j) continue;
+                const f3 = interactionPool[k];
+
+                if (f1.ignoreImd || f2.ignoreImd || f3.ignoreImd) continue;
+                
+                // A. Candidate as Victim: Sources f1, f2, f3 must form a cluster with Candidate
+                const isGlobal_13 = f1.zoneIdx < 0 || f3.zoneIdx < 0 || candidateZoneIdx < 0 || f2.zoneIdx < 0;
+                
+                const linked_13 = isGlobal_13 || (
+                                  (f1.zoneIdx === f3.zoneIdx || (matrix && matrix[f1.zoneIdx]?.[f3.zoneIdx])) &&
+                                  (candidateZoneIdx === f3.zoneIdx || (matrix && matrix[candidateZoneIdx]?.[f3.zoneIdx]))
+                                 );
+                const linked_23 = isGlobal_13 || (f2.zoneIdx === f3.zoneIdx || (matrix && matrix[f2.zoneIdx]?.[f3.zoneIdx]));
+                
+                const clusterSources = linked_12 && linked_13 && linked_23;
+
+                if (clusterSources) {
+                    const freqs = [f1.hz, f2.hz, f3.hz];
+                    const spread = Math.max(...freqs) - Math.min(...freqs);
+                    
+                    if (spread <= FESTIVAL_MAX_IMD3_SPREAD_HZ && candThreeToneThHz > 0 && !(candidateLinearMode && f1.isDigital && f2.isDigital && f3.isDigital)) {
+                        const p3s = [f1.hz + f2.hz - f3.hz, f1.hz + f3.hz - f2.hz, f2.hz + f3.hz - f1.hz];
+                        for (const p3 of p3s) {
+                            const diffHz = Math.abs(candidateHz - p3);
+                            if (diffHz < candThreeToneThHz) {
+                                conflicts.push({ type: '3-Tone IMD (Victim)', product: p3 / 1000000, sourceFreqs: [f1, f2, f3], targetFreq, diff: diffHz / 1000000 });
+                                return { conflicts, reason: 'imd3' };
+                            }
+                        }
+                    }
+                }
+
+                // B. Candidate as Aggressor: Sources Cand, f1, f2 must form a cluster with Victim f3
+                const isGlobal_C2 = candidateZoneIdx < 0 || f1.zoneIdx < 0 || f2.zoneIdx < 0 || f3.zoneIdx < 0;
+                const linked_C2 = isGlobal_C2 || (
+                                  (candidateZoneIdx === f2.zoneIdx || (matrix && matrix[candidateZoneIdx]?.[f2.zoneIdx])) &&
+                                  (f3.zoneIdx === f2.zoneIdx || (matrix && matrix[f3.zoneIdx]?.[f2.zoneIdx]))
+                                 );
+                
+                const clusterAggressors = linked_C1 && linked_C2 && linked_13 && linked_23;
+
+                if (clusterAggressors) {
+                    const freqs = [candidateHz, f1.hz, f2.hz];
+                    const spread = Math.max(...freqs) - Math.min(...freqs);
+
+                    const f3ThreeToneThHz = f3.isDigital ? 0 : toHz(f3.th.threeTone);
+                    if (spread <= FESTIVAL_MAX_IMD3_SPREAD_HZ && f3ThreeToneThHz > 0 && !(f3.isDigital && candidateLinearMode && f1.isDigital && f2.isDigital)) {
+                        const products = [
+                            { p: candidateHz + f1.hz - f2.hz, s: [targetFreq, f1, f2] },
+                            { p: candidateHz + f2.hz - f1.hz, s: [targetFreq, f2, f1] },
+                            { p: f1.hz + f2.hz - candidateHz, s: [f1, f2, targetFreq] }
+                        ];
+                        for (const item of products) {
+                            const diff = Math.abs(f3.hz - item.p);
+                            if (diff < f3ThreeToneThHz) {
+                                conflicts.push({ type: '3-Tone IMD (Aggressor)', product: item.p / 1000000, sourceFreqs: item.s, targetFreq: f3, diff: diff / 1000000 });
+                                return { conflicts, reason: 'imd3' };
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return { conflicts };
+};
+
+const getEquipmentAwareExclusions = (
+    baseExclusions: {min: number, max: number}[],
+    eqType: TxType,
+    triStates: Record<number, TVChannelState> | undefined,
+    region: 'uk' | 'us'
+) => {
+    const final = [...baseExclusions];
+
+    // --- UK CHANNEL 38 GUARD BANDS ---
+    // In the UK, Channel 38 has 500kHz guard bands on either side.
+    // Usable range is 606.500 - 613.500 MHz.
+    // We must explicitly exclude the guard bands: 606.0-606.5 and 613.5-614.0.
+    if (region === 'uk') {
+        final.push({ min: 606.0, max: 606.5 });
+        final.push({ min: 613.5, max: 614.0 });
+    }
+
+    if (!triStates) return final;
+    const channelMap = region === 'uk' ? UK_TV_CHANNELS : US_TV_CHANNELS;
+    Object.entries(triStates).forEach(([chStr, state]) => {
+        const ch = Number(chStr);
+        const range = channelMap[ch];
+        if (!range) return;
+        const isExclusion = (state === 'blocked') || (eqType === 'mic' && state === 'iem-only') || (eqType === 'iem' && state === 'mic-only');
+        if (isExclusion) final.push({ min: range[0], max: range[1] });
+    });
+    return final;
+};
+
+export const getFinalThresholds = (freq: Partial<Frequency>, db: Record<string, EquipmentProfile>, globalOverrides?: Record<string, Partial<Thresholds>>): Thresholds => {
+    if (freq.manualThresholds) return freq.manualThresholds;
+    const equipmentKey = freq.equipmentKey || 'custom';
+    const profile = db[equipmentKey] || db['custom'];
+    const level = freq.compatibilityLevel || 'standard';
+    
+    const base: Thresholds = {
+        fundamental: profile?.recommendedThresholds?.fundamental ?? 0.35,
+        twoTone: profile?.recommendedThresholds?.twoTone ?? 0.075,
+        threeTone: profile?.recommendedThresholds?.threeTone ?? 0.05,
+        fiveTone: profile?.recommendedThresholds?.fiveTone ?? 0,
+        sevenTone: profile?.recommendedThresholds?.sevenTone ?? 0,
+    };
+
+    if (globalOverrides && globalOverrides[equipmentKey]) {
+        const u = globalOverrides[equipmentKey];
+        if (u.fundamental !== undefined) base.fundamental = u.fundamental;
+        if (u.twoTone !== undefined) base.twoTone = u.twoTone;
+        if (u.threeTone !== undefined) base.threeTone = u.threeTone;
+        if (u.fiveTone !== undefined) base.fiveTone = u.fiveTone;
+        if (u.sevenTone !== undefined) base.sevenTone = u.sevenTone;
+    }
+
+    const result: Thresholds = { ...base };
+    if (level === 'aggressive') {
+        result.fundamental = Math.max(0.2, base.fundamental - 0.050);
+        result.twoTone = Math.max(0.0, base.twoTone - 0.025);
+        result.threeTone = Math.max(0.0, base.threeTone - 0.050);
+    } else if (level === 'robust') {
+        result.fundamental = base.fundamental + 0.050;
+        result.twoTone = base.twoTone + 0.025;
+        result.threeTone = base.threeTone + 0.050;
+    }
+    return result;
+};
+
+export const checkCompatibility = (
+    freqs: Frequency[], 
+    thresholds: Thresholds, 
+    db?: Record<string, EquipmentProfile>, 
+    globalOverrides?: Record<string, Partial<Thresholds>>
+): AnalysisResult => {
+    const conflicts: Conflict[] = [];
+    const validFreqs = freqs.filter(f => f.value > 0);
+    for (let i = 0; i < validFreqs.length; i++) {
+        const fTarget = validFreqs[i];
+        const pool = validFreqs.filter((_, idx) => idx !== i);
+        const dummyDist = [[0]];
+        const targetTh = fTarget.manualThresholds || (db ? getFinalThresholds(fTarget, db, globalOverrides) : thresholds);
+        const { conflicts: issues } = isExhaustiveCompatibleMutual(
+            fTarget.value, 
+            targetTh, 
+            0, 
+            pool.map(p => ({ ...p, zoneIndex: p.zoneIndex ?? 0 })), 
+            dummyDist, 
+            db || {}, 
+            globalOverrides, 
+            10, 
+            fTarget.linearMode
+        );
+        issues.forEach(issue => {
+            issue.targetFreq = { id: fTarget.id, value: fTarget.value, type: fTarget.type, label: fTarget.label };
+            conflicts.push(issue);
+        });
+    }
+    return { conflicts, totalChecks: validFreqs.length };
+};
+
+/**
+ * ENTRY POINT: TALKBACK AUDIT
+ */
+export const checkTalkbackCompatibility = (
+    freqs: Frequency[], 
+    distances: number[][], 
+    matrix: boolean[][], 
+    mode: TalkbackMode = 'standard', 
+    country: string = 'UK',
+    customBaseRange?: { min: number; max: number }
+): AnalysisResult => {
+    const conflicts: Conflict[] = [];
+    const validFreqs = freqs.filter(f => f.value > 0);
+    
+    const taggedFreqs = validFreqs.map(f => {
+        return {
+            ...f,
+            isTx: f.isTx !== undefined ? f.isTx : true
+        };
+    });
+
+    const forbiddenRanges = TALKBACK_FORBIDDEN_RANGES_BY_COUNTRY[country] || [];
+
+    for (let i = 0; i < taggedFreqs.length; i++) {
+        const fTarget = taggedFreqs[i];
+
+        // 1. Regulatory Check
+        const inForbidden = forbiddenRanges.some(range => {
+            // Disable 450-453 MHz AND 465-467 MHz forbidden zones in Mainland Europe mode
+            if (mode === 'europe') {
+                const is450Range = range.min >= 450 && range.max <= 453;
+                const is465Range = range.min >= 465 && range.max <= 467;
+                if (is450Range || is465Range) return false;
+            }
+            return fTarget.value >= (range.min - 0.000005) && fTarget.value <= (range.max + 0.000005);
+        });
+        
+        if (inForbidden) {
+            conflicts.push({
+                type: 'Regulatory Violation',
+                product: fTarget.value,
+                sourceFreqs: [],
+                targetFreq: fTarget,
+                diff: 0
+            });
+        }
+
+        // 2. Interaction Checks
+        const pool = taggedFreqs.filter((_, idx) => idx !== i);
+        const { conflicts: issues } = isTalkbackCompatibleMutual(fTarget.value, pool, distances, fTarget.zoneIndex ?? 0, matrix, fTarget.isTx);
+        issues.forEach(issue => {
+            issue.targetFreq = { id: fTarget.id, value: fTarget.value, type: fTarget.type, label: fTarget.label };
+            conflicts.push(issue);
+        });
+    }
+    return { conflicts, totalChecks: validFreqs.length };
+};
+
+export const checkCompatibilityTimeline = (freqs: Frequency[], thresholds: Thresholds, scenes: Scene[]): AnalysisResult => {
+    const allConflicts: Conflict[] = [];
+    let totalChecks = 0;
+    if (!scenes || scenes.length === 0) return checkCompatibility(freqs, thresholds);
+    scenes.forEach(scene => {
+        const sceneFreqs = freqs.filter(f => scene.activeFrequencyIds.has(f.id));
+        if (sceneFreqs.length > 1) {
+            const result = checkCompatibility(sceneFreqs, thresholds);
+            result.conflicts.forEach(c => { allConflicts.push({ ...c, sceneName: scene.name }); });
+            totalChecks += result.totalChecks;
+        }
+    });
+    return { conflicts: allConflicts, totalChecks };
+};
+
+export const suggestBetterFrequencies = (
+    freqs: Frequency[],
+    thresholds: Thresholds,
+    exclusions: { min: number, max: number }[],
+    db: Record<string, EquipmentProfile>,
+    maxIterations: number = 10
+): Frequency[] => {
+    let currentFreqs = [...freqs];
+    
+    for (let iter = 0; iter < maxIterations; iter++) {
+        const { conflicts } = checkCompatibility(currentFreqs, thresholds);
+        if (conflicts.length === 0) break;
+
+        // 1. Identify bottleneck frequencies
+        const conflictCounts = new Map<string, number>();
+        conflicts.forEach(c => {
+            if (c.targetFreq?.id) {
+                conflictCounts.set(c.targetFreq.id, (conflictCounts.get(c.targetFreq.id) || 0) + 1);
+            }
+            c.sourceFreqs?.forEach(s => {
+                if (s.id) {
+                    conflictCounts.set(s.id, (conflictCounts.get(s.id) || 0) + 1);
+                }
+            });
+        });
+
+        // 2. Find the frequency with the most conflicts
+        let worstFreqId = "";
+        let maxConflicts = -1;
+        conflictCounts.forEach((count, id) => {
+            if (count > maxConflicts) {
+                maxConflicts = count;
+                worstFreqId = id;
+            }
+        });
+
+        if (!worstFreqId) break;
+
+        // 3. Try to replace it
+        const worstFreq = currentFreqs.find(f => f.id === worstFreqId);
+        if (!worstFreq) break;
+
+        // Get candidates for replacement
+        const profile = db[worstFreq.equipmentKey || 'custom'] || db['custom'];
+        const candidates = getCandidates(profile.minFreq, profile.maxFreq, profile.tuningStep || 0.025, exclusions, null);
+        
+        // Try to find a candidate that resolves conflicts
+        let replaced = false;
+        for (const cand of shuffleArray(candidates)) {
+            const tempFreqs = currentFreqs.map(f => f.id === worstFreqId ? { ...f, value: cand } : f);
+            if (checkCompatibility(tempFreqs, thresholds).conflicts.length < conflicts.length) {
+                currentFreqs = tempFreqs;
+                replaced = true;
+                break;
+            }
+        }
+        
+        if (!replaced) {
+            // If we can't find a better one, just try a random one to escape local minima
+            const cand = candidates[Math.floor(Math.random() * candidates.length)];
+            currentFreqs = currentFreqs.map(f => f.id === worstFreqId ? { ...f, value: cand } : f);
+        }
+    }
+    
+    return currentFreqs;
+};
+
+export const generateCompatibleFreqs = (
+    count: number, min: number, max: number, step: number, exclusions: { min: number, max: number }[],
+    db: Record<string, EquipmentProfile>, equipmentKey: string, level: CompatibilityLevel,
+    globalOverrides?: Record<string, Partial<Thresholds>>, manualThresholds?: Thresholds
+): Frequency[] => {
+    const thresholds = manualThresholds || getFinalThresholds({ equipmentKey, compatibilityLevel: level }, db, globalOverrides);
+    const profile = db[equipmentKey] || db['custom'];
+    const candidates = shuffleArray(getCandidates(min, max, step || 0.025, exclusions, null));
+    const results: Frequency[] = [];
+    const dummyDist = [[0]];
+    for (const val of candidates) {
+        if (results.length >= count) break;
+        if (isExhaustiveCompatibleMutual(val, thresholds, 0, results, dummyDist, db, globalOverrides, 10, false).conflicts.length === 0) {
+            results.push({ id: `MB-${results.length + 1}-${Math.random().toString(36).substring(2, 5).toUpperCase()}`, value: val, equipmentKey, compatibilityLevel: level, manualThresholds: manualThresholds ? thresholds : undefined, type: profile?.type || 'generic' });
+        }
+    }
+    return results;
+};
+
+export const generateMultizoneFrequencies = async (
+    
+    groups: ZoneConfig[],
+    db: Record<string, EquipmentProfile>,
+    compatibilityMatrix: boolean[][],
+    distances: number[][],
+    previousResults: { zones: Zone[] } | null,
+    tvExclusions: { min: number, max: number }[],
+    globalOverrides?: Record<string, Partial<Thresholds>>,
+    triStateChannels?: Record<number, TVChannelState>,
+    region: 'uk' | 'us' = 'uk',
+    onProgress?: (p: number) => void,
+    manualFrequencies: Frequency[] = [],
+    physicalZones: ZoneConfig[] = [],
+    abortSignal?: AbortSignal,
+    distanceWeightingEnabled: boolean = true,
+    calculationStrategy: 'even-distribution' | 'bottom-up' | 'top-down' | 'high-density' = 'even-distribution',
+    maxTrials: number = 50
+): Promise<{ zones: Zone[], spares: { mics: Frequency[], iems: Frequency[] } }> => {
+    const coordStartTime = Date.now();
+    if (abortSignal?.aborted) throw new Error('AbortError');
+    const MAX_TRIALS = maxTrials; // Controlled by the user up to 50
+    let bestTotalFound = -1;
+    let bestResult: { zones: Zone[] } | null = null;
+    let trialsSinceImprovement = 0;
+
+    const totalRequested = groups.reduce((a, b) => a + b.count, 0);
+
+    const siteWidePreserved = [
+        ...(previousResults?.zones.flatMap(z => z.frequencies || []).filter(f => f.locked && f.value > 0) || []),
+        ...manualFrequencies.map(f => ({ ...f, locked: true }))
+    ];
+    const uniqueZoneIndices = Array.from(new Set(groups.map(g => g.zoneIndex ?? 0))).sort((a, b) => a - b);
+    
+    // PRE-CALCULATION: Generate candidate pools once per group
+    const candidateCache = new Map<number, number[]>();
+    for (let i = 0; i < groups.length; i++) {
+        if (abortSignal?.aborted) throw new Error('AbortError');
+        const config = groups[i];
+        const equipmentKey = config.equipmentKey || 'custom';
+        const profile = db[equipmentKey] || db['custom'];
+        const eqType = config.type || profile?.type || 'generic';
+        const minFreq = (equipmentKey === 'custom' && config.customMin) ? config.customMin : profile.minFreq;
+        const maxFreq = (equipmentKey === 'custom' && config.customMax) ? config.customMax : profile.maxFreq;
+        const finalExclusions = getEquipmentAwareExclusions(tvExclusions, eqType as any, triStateChannels, region);
+        let candidates = getCandidates(minFreq, maxFreq, profile?.tuningStep || 0.025, finalExclusions, null);
+        
+        if (calculationStrategy === 'bottom-up') {
+            // Already sorted bottom-up
+        } else if (calculationStrategy === 'top-down') {
+            candidates.reverse();
+        } else if (calculationStrategy === 'high-density') {
+            // Cache natural order for high-density, we'll manipulate per-trial below
+        } else {
+            // even-distribution
+            candidates = shuffleArray(candidates);
+        }
+        
+        candidateCache.set(i, candidates);
+        
+        // Yield during pre-calc if many groups
+        if (i % 10 === 0) await new Promise(r => setTimeout(r, 0));
+    }
+
+    let lastYieldTime = performance.now();
+
+    for (let trial = 0; trial < MAX_TRIALS; trial++) {
+        if (abortSignal?.aborted) throw new Error('AbortError');
+        const allResolvedFreqs: Frequency[] = [...siteWidePreserved]; 
+        const lockedPool = [...siteWidePreserved];
+        const zoneResultsMap = new Map<number, Frequency[]>();
+        let currentTrialTotal = 0;
+        
+        // Randomized Group Ordering to improve yield (Trial 0 is deterministic priority sort)
+        let trialGroupsWithIndices = groups.map((g, idx) => ({ config: g, originalIndex: idx }));
+        if (trial === 0) {
+            trialGroupsWithIndices.sort((a, b) => {
+                const aType = a.config.type || db[a.config.equipmentKey || 'custom']?.type || 'mic';
+                const bType = b.config.type || db[b.config.equipmentKey || 'custom']?.type || 'mic';
+                // IEMs (Transmitters) generally cause more IMD and are wider, place them first
+                if (aType === 'iem' && bType !== 'iem') return -1;
+                if (bType === 'iem' && aType !== 'iem') return 1;
+                
+                // Then sort by count descending (hardest blocks to pack)
+                if (b.config.count !== a.config.count) return b.config.count - a.config.count;
+                
+                // Then by tuning bandwidth if possible
+                const aProf = db[a.config.equipmentKey || 'custom'];
+                const bProf = db[b.config.equipmentKey || 'custom'];
+                const aBw = aProf ? aProf.maxFreq - aProf.minFreq : 0;
+                const bBw = bProf ? bProf.maxFreq - bProf.minFreq : 0;
+                return aBw - bBw; // smaller tuning bandwidth first for constraints
+            });
+        } else {
+            trialGroupsWithIndices = shuffleArray(trialGroupsWithIndices);
+        }
+        const shuffledGroups = trialGroupsWithIndices;
+
+        for (let i = 0; i < shuffledGroups.length; i++) {
+            const { config, originalIndex } = shuffledGroups[i];
+            const zIdx = config.zoneIndex ?? 0;
+            const equipmentKey = config.equipmentKey || 'custom';
+            const thresholds = config.useManualParams ? { fundamental: config.manualFundamental ?? 0.35, twoTone: config.manualTwoTone ?? 0.05, threeTone: config.manualThreeTone ?? 0.05, fiveTone: 0, sevenTone: 0 } : getFinalThresholds({ equipmentKey, compatibilityLevel: config.compatibilityLevel || 'standard' }, db, globalOverrides);
+            const profile = db[equipmentKey] || db['custom'];
+            const eqType = config.type || profile?.type || 'generic';
+            
+            const groupFreqs: Frequency[] = [];
+            // Pass 1: Strict match by label and zoneIndex
+            for (let j = 0; j < lockedPool.length; j++) {
+                const f = lockedPool[j];
+                if (f.label === config.name && f.zoneIndex === zIdx && groupFreqs.length < config.count) {
+                    groupFreqs.push(f); lockedPool.splice(j, 1); j--;
+                }
+            }
+            
+            // Pass 2: Loose match by equipmentKey and zoneIndex if we still need more
+            if (groupFreqs.length < config.count) {
+                for (let j = 0; j < lockedPool.length; j++) {
+                    const f = lockedPool[j];
+                    if (f.zoneIndex === zIdx && f.equipmentKey === equipmentKey && groupFreqs.length < config.count) {
+                        // Update the label to match the new group name so it stays linked
+                        groupFreqs.push({ ...f, label: config.name }); 
+                        lockedPool.splice(j, 1); j--;
+                    }
+                }
+            }
+            
+            const targetToGenerate = Math.max(0, config.count - groupFreqs.length);
+            if (targetToGenerate > 0) {
+                // Use cached candidates
+                let candidates = [...(candidateCache.get(originalIndex) || [])];
+                
+                // Only shuffle if using even-distribution, otherwise maintain the sorted order (top-down or bottom-up)
+                if (calculationStrategy === 'even-distribution') {
+                    candidates = shuffleArray(candidates);
+                } else if (calculationStrategy === 'high-density') {
+                    const pattern = Math.random();
+                    if (pattern > 0.75) {
+                        candidates.reverse();
+                    } else if (pattern > 0.5) {
+                        // Center-out packing
+                        const centerCand = [];
+                        let l = Math.floor(candidates.length / 2) - 1; let r = Math.floor(candidates.length / 2);
+                        while(l >= 0 || r < candidates.length) {
+                            if(r < candidates.length) { centerCand.push(candidates[r]); r++; }
+                            if(l >= 0) { centerCand.push(candidates[l]); l--; }
+                        }
+                        candidates = centerCand;
+                    } else if (pattern > 0.25) {
+                        // Edges-in packing
+                        const edgesCand = [];
+                        let l = 0; let r = candidates.length - 1;
+                        while(l <= r) {
+                            if(l === r) { edgesCand.push(candidates[l]); break; }
+                            edgesCand.push(candidates[l]); edgesCand.push(candidates[r]);
+                            l++; r--;
+                        }
+                        candidates = edgesCand;
+                    }
+                    // else (pattern <= 0.25) -> natural Bottom-up (already sorted)
+                }
+                
+                for (const val of candidates) {
+                    if (Date.now() - coordStartTime > 120000) throw new Error('TimeoutError: The coordination period exceeded 2 minutes. The app has stopped the process. Please reduce the number of requested frequencies or increase channel spacing.');
+                    if (groupFreqs.length >= config.count) break;
+                    if (isExhaustiveCompatibleMutual(val, thresholds, zIdx, allResolvedFreqs, distances, db, globalOverrides, 10, config.linearMode, compatibilityMatrix, distanceWeightingEnabled).conflicts.length === 0) {
+                        const newFreq: Frequency = { id: `Z${zIdx + 1}-T${trial}-G${originalIndex + 1}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`, value: val, locked: false, equipmentKey, compatibilityLevel: config.compatibilityLevel || 'standard', manualThresholds: config.useManualParams ? thresholds : undefined, zoneIndex: zIdx, label: config.name, type: eqType as TxType, linearMode: config.linearMode };
+                        groupFreqs.push(newFreq); allResolvedFreqs.push(newFreq);
+                    }
+                }
+            }
+            const existingInZone = zoneResultsMap.get(zIdx) || [];
+            zoneResultsMap.set(zIdx, [...existingInZone, ...groupFreqs]);
+            currentTrialTotal += groupFreqs.length;
+
+            // CRITICAL: Time-based yielding (every 50ms) to keep UI responsive without over-yielding
+            const now = performance.now();
+            if (now - lastYieldTime > 50) {
+                await new Promise(r => setTimeout(r, 0));
+                lastYieldTime = performance.now();
+            }
+        }
+        
+        // Add any remaining locked frequencies that didn't match a group
+        for (const f of lockedPool) {
+            const zIdx = f.zoneIndex ?? 0;
+            if (zIdx < 0) continue;
+            const existingInZone = zoneResultsMap.get(zIdx) || [];
+            if (!existingInZone.some(existing => existing.id === f.id)) {
+                zoneResultsMap.set(zIdx, [...existingInZone, f]);
+            }
+        }
+
+        if (currentTrialTotal > bestTotalFound) {
+            bestTotalFound = currentTrialTotal;
+            trialsSinceImprovement = 0;
+            const allZIndices = Array.from(new Set([...uniqueZoneIndices, ...Array.from(zoneResultsMap.keys())]))
+                .filter(zIdx => zIdx >= 0)
+                .sort((a, b) => a - b);
+            const trialZones: Zone[] = allZIndices.map(zIdx => ({ 
+                name: physicalZones[zIdx]?.name || `Zone ${zIdx + 1}`, 
+                frequencies: zoneResultsMap.get(zIdx) || [] 
+            }));
+            bestResult = { zones: trialZones };
+        } else {
+            trialsSinceImprovement++;
+        }
+
+        if (onProgress) onProgress((trial + 1) / MAX_TRIALS);
+        if (bestTotalFound >= totalRequested) break;
+        
+        // Adaptive Early Exit: If no improvement for 6 trials (after initial warmup), stop.
+        if (trialsSinceImprovement > 6 && trial > 10) break;
+
+        // Yield between trials
+        await new Promise(r => setTimeout(r, 0));
+    }
+    return { zones: bestResult?.zones || [], spares: { mics: [], iems: [] } };
+};
+
+export const resolveGeneratorRequests = async (
+    requests: GeneratorRequest[],
+    lockedConstraints: Frequency[],
+    db: Record<string, EquipmentProfile>,
+    exclusions: { min: number, max: number }[],
+    inclusions: { min: number, max: number }[] | null,
+    advanced: boolean,
+    useGlobalThresholds: boolean,
+    onProgress: (p: number) => void,
+    manualConstraints: Frequency[],
+    globalOverrides?: Record<string, Partial<Thresholds>>,
+    generatorGlobalThresholds?: { fundamental: string; twoTone: string; threeTone: string; fiveTone?: string; sevenTone?: string },
+    ignoreManualIMD: boolean = false,
+    triStates?: Record<number, TVChannelState>,
+    region: 'uk' | 'us' = 'uk',
+    siteThresholds?: Thresholds,
+    calculationStrategy: 'even-distribution' | 'bottom-up' | 'top-down' | 'high-density' = 'even-distribution'
+): Promise<Frequency[]> => {
+    
+    const MAX_TRIALS = 100; 
+    let bestTotalFound = -1;
+    let bestPool: Frequency[] = [];
+    
+    const totalToFind = requests.reduce((s, r) => s + (parseInt(String(r.count)) || 0), 0);
+    const dummyDist = [[0]];
+    const runNonce = Math.random().toString(36).substring(2, 6).toUpperCase();
+
+    for (let trial = 0; trial < MAX_TRIALS; trial++) {
+        // START WITH THE UNIFIED POOL: Every frequency currently on site is a potential IMD aggressor or victim
+        const unifiedPool: Frequency[] = [...manualConstraints, ...lockedConstraints].map(f => {
+            const profile = db[f.equipmentKey || 'custom'] || db['custom'];
+            
+            // USE PROVIDED SITE THRESHOLDS OR FALLBACK
+            let thToUse: Thresholds;
+            if (ignoreManualIMD) {
+                thToUse = { fundamental: siteThresholds?.fundamental || f.manualThresholds?.fundamental || profile?.recommendedThresholds?.fundamental || 0.35, twoTone: 0, threeTone: 0, fiveTone: 0, sevenTone: 0 };
+            } else {
+                thToUse = siteThresholds || f.manualThresholds || getFinalThresholds(f, db, globalOverrides);
+            }
+
+            return {
+                ...f,
+                zoneIndex: f.zoneIndex ?? 0,
+                manualThresholds: thToUse
+            };
+        });
+
+        let currentTrialFound = 0;
+
+        // Optimization: Shuffle request order each trial to explore better packing combinations
+        const trialRequests = trial % 10 === 0 ? requests : shuffleArray(requests);
+
+        for (let i = 0; i < trialRequests.length; i++) {
+            const req = trialRequests[i];
+            const count = parseInt(String(req.count)) || 0;
+            const alreadyFoundForThisReq = unifiedPool.filter(f => f.sourceRequestId === String(req.id)).length;
+            const targetToFind = Math.max(0, count - alreadyFoundForThisReq);
+            
+            let reqThresholds: Thresholds;
+            if (useGlobalThresholds && generatorGlobalThresholds) {
+                reqThresholds = { 
+                    fundamental: isNaN(parseFloat(generatorGlobalThresholds.fundamental)) ? 0.35 : parseFloat(generatorGlobalThresholds.fundamental), 
+                    twoTone: isNaN(parseFloat(generatorGlobalThresholds.twoTone)) ? 0.05 : parseFloat(generatorGlobalThresholds.twoTone), 
+                    threeTone: isNaN(parseFloat(generatorGlobalThresholds.threeTone)) ? 0.05 : parseFloat(generatorGlobalThresholds.threeTone), 
+                    fiveTone: isNaN(parseFloat(generatorGlobalThresholds.fiveTone)) ? 0 : parseFloat(generatorGlobalThresholds.fiveTone), 
+                    sevenTone: isNaN(parseFloat(generatorGlobalThresholds.sevenTone)) ? 0 : parseFloat(generatorGlobalThresholds.sevenTone) 
+                };
+            } else if (req.useManualParams === true) {
+                reqThresholds = { 
+                    fundamental: isNaN(parseFloat(String(req.manualFundamental))) ? 0.35 : parseFloat(String(req.manualFundamental)), 
+                    twoTone: isNaN(parseFloat(String(req.manualTwoTone))) ? 0.05 : parseFloat(String(req.manualTwoTone)), 
+                    threeTone: isNaN(parseFloat(String(req.manualThreeTone))) ? 0.00 : parseFloat(String(req.manualThreeTone)), 
+                    fiveTone: isNaN(parseFloat(String(req.manualFiveTone))) ? 0 : parseFloat(String(req.manualFiveTone)),
+                    sevenTone: isNaN(parseFloat(String(req.manualSevenTone))) ? 0 : parseFloat(String(req.manualSevenTone))
+                };
+            } else {
+                reqThresholds = getFinalThresholds({ equipmentKey: req.key, compatibilityLevel: req.compatibilityLevel }, db, globalOverrides);
+            }
+
+            if (!advanced) {
+                reqThresholds.fiveTone = 0;
+                reqThresholds.sevenTone = 0;
+            }
+
+            const profile = db[req.key] || db['custom'];
+            const tuningStep = profile?.tuningStep || 0.025;
+            const typeToUse = req.type || (profile?.type as TxType) || 'generic';
+            const finalExclusions = getEquipmentAwareExclusions(exclusions, typeToUse, triStates, region);
+            
+            let candidates = getCandidates(parseFloat(String(req.customMin)), parseFloat(String(req.customMax)), tuningStep, finalExclusions, inclusions);
+            
+            if (calculationStrategy === 'bottom-up') {
+                // Already sorted
+            } else if (calculationStrategy === 'top-down') {
+                candidates.reverse();
+            } else if (calculationStrategy === 'high-density') {
+                const pattern = Math.random();
+                if (pattern > 0.75) {
+                    candidates.reverse();
+                } else if (pattern > 0.5) {
+                    const centerCand = [];
+                    let l = Math.floor(candidates.length / 2) - 1; let r = Math.floor(candidates.length / 2);
+                    while (l >= 0 || r < candidates.length) {
+                        if (r < candidates.length) centerCand.push(candidates[r++]);
+                        if (l >= 0) centerCand.push(candidates[l--]);
+                    }
+                    candidates = centerCand;
+                } else if (pattern > 0.25) {
+                    const edgeCand = [];
+                    let l = 0; let r = candidates.length - 1;
+                    while(l <= r) {
+                        if (l === r) { edgeCand.push(candidates[l]); break; }
+                        edgeCand.push(candidates[l++]); edgeCand.push(candidates[r--]);
+                    }
+                    candidates = edgeCand;
+                }
+            } else {
+                candidates = shuffleArray(candidates);
+            }
+            
+            let foundForThisReq = 0;
+            for (const val of candidates) {
+                if (foundForThisReq >= targetToFind) break;
+                
+                const unifiedCheck = isExhaustiveCompatibleMutual(
+                    val, 
+                    reqThresholds, 
+                    0, 
+                    unifiedPool, 
+                    dummyDist, 
+                    db, 
+                    globalOverrides, 
+                    10, 
+                    req.linearMode
+                );
+
+                if (unifiedCheck.conflicts.length === 0) {
+                    const f: Frequency = { 
+                        id: `R${runNonce}-T${trial}-G${i}-${foundForThisReq}`, 
+                        value: val, 
+                        type: typeToUse, 
+                        sourceRequestId: String(req.id), 
+                        equipmentKey: req.key, 
+                        compatibilityLevel: req.compatibilityLevel, 
+                        label: req.label ? `${req.label} ${alreadyFoundForThisReq + foundForThisReq + 1}` : undefined, 
+                        manualThresholds: (useGlobalThresholds || req.useManualParams) ? reqThresholds : undefined, 
+                        zoneIndex: 0, 
+                        locked: false, 
+                        linearMode: req.linearMode 
+                    };
+                    unifiedPool.push(f);
+                    foundForThisReq++;
+                    currentTrialFound++;
+                }
+            }
+        }
+
+        if (currentTrialFound > bestTotalFound) {
+            bestTotalFound = currentTrialFound;
+            bestPool = unifiedPool;
+        }
+
+        onProgress((trial + 1) / MAX_TRIALS);
+        if (bestTotalFound >= totalToFind) break;
+        if (trial % 5 === 0) await new Promise(r => setTimeout(r, 0));
+    }
+
+    return bestPool;
+};
+
+/**
+ * ENGINE 4: SITE INFRASTRUCTURE (UNIFIED CONSTANT + HOUSE)
+ */
+export const generateSiteInfrastructure = async (
+    constant: ConstantSystemRequest[], 
+    house: ConstantSystemRequest[], 
+    zoneConfigs: ZoneConfig[], 
+    distances: number[][],
+    db: Record<string, EquipmentProfile>, 
+    exclusions: { min: number, max: number }[], 
+    matrix: boolean[][], 
+    onProgress?: (p: { found: number, processed: number, total: number, status?: string }) => void,
+    inclusionRanges?: { min: number, max: number }[] | null, 
+    globalOverrides?: Record<string, Partial<Thresholds>>, 
+    triStates?: Record<number, TVChannelState>, 
+    region: 'uk' | 'us' = 'uk',
+    wmasState?: WMASState, 
+    calculationStrategy: 'even-distribution' | 'bottom-up' | 'top-down' | 'high-density' = 'even-distribution', 
+    acts?: FestivalAct[],
+    abortSignal?: AbortSignal
+): Promise<{ constant: ConstantSystemRequest[], house: ConstantSystemRequest[] }> => {
+    const coordStartTime = Date.now();
+    // Treat everyone in the "Global Infrastructure" pool as a single group to ensure 
+    // mutual intermodulation compatibility regardless of which set is "First".
+    // Constant Transmits and House Systems often live on the same stage and must be intermod-free.
+    
+    if (abortSignal?.aborted) throw new Error('AbortError');
+    
+    // 1. Gather all requests into a unified pool for picking
+    // We tag them so we can separate them back at the end.
+    type InfraRequest = { 
+        source: 'constant' | 'house', 
+        sysIndex: number, 
+        sys: ConstantSystemRequest,
+        zoneIdx: number
+    };
+    
+    const infraPool: InfraRequest[] = [
+        ...constant.map((s, i) => ({ source: 'constant' as const, sysIndex: i, sys: s, zoneIdx: zoneConfigs.findIndex(z => z.name.toLowerCase().trim() === (s.stageName || '').toLowerCase().trim()) })),
+        ...house.map((s, i) => ({ source: 'house' as const, sysIndex: i, sys: s, zoneIdx: zoneConfigs.findIndex(z => z.name.toLowerCase().trim() === (s.stageName || '').toLowerCase().trim()) }))
+    ];
+    
+    const resultsConstant = constant.map(s => ({ ...s, frequencies: [] as Frequency[] }));
+    const resultsHouse = house.map(s => ({ ...s, frequencies: [] as Frequency[] }));
+    
+    const siteFreqs: Frequency[] = [];
+    const runNonce = Math.random().toString(36).substring(2, 6).toUpperCase();
+    
+    // 2. Handle Locked Frequencies (Sitewide Barriers)
+    infraPool.forEach(item => {
+        const currentReqIds = new Set<string>([
+            ...(item.sys.micRequests || []).map(r => r.id),
+            ...(item.sys.iemRequests || []).map(r => r.id)
+        ]);
+
+        item.sys.frequencies?.forEach(f => {
+            if (f.locked && f.value > 0) {
+                const updatedF = { ...f, zoneIndex: item.zoneIdx };
+                if (updatedF.sourceRequestId && !currentReqIds.has(updatedF.sourceRequestId)) {
+                    updatedF.sourceRequestId = undefined;
+                }
+                siteFreqs.push(updatedF);
+                if (item.source === 'constant') resultsConstant[item.sysIndex].frequencies!.push(updatedF);
+                else resultsHouse[item.sysIndex].frequencies!.push(updatedF);
+            }
+        });
+    });
+
+    const globalExclusions = [...exclusions];
+    if (wmasState && wmasState.nodes) {
+        wmasState.nodes.forEach(node => {
+            if (node.assignedBlock && (node.isHouseSystem !== false)) {
+                globalExclusions.push({ min: node.assignedBlock.start, max: node.assignedBlock.end });
+            }
+        });
+    }
+
+    // 3. Shuffle the entire pool to remove order-bias
+    const shuffledInfra = shuffleArray(infraPool);
+    let totalRequested = 0;
+    infraPool.forEach(item => {
+        totalRequested += (item.sys.micRequests?.reduce((a, b) => a + b.count, 0) || 0);
+        totalRequested += (item.sys.iemRequests?.reduce((a, b) => a + b.count, 0) || 0);
+    });
+
+    let totalFound = 0;
+    let systemsProcessed = 0;
+
+    for (let i = 0; i < shuffledInfra.length; i++) {
+        if (abortSignal?.aborted) throw new Error('AbortError');
+        const item = shuffledInfra[i];
+        const sys = item.sys;
+        const zoneIdx = item.zoneIdx;
+        const sourceResults = item.source === 'constant' ? resultsConstant[item.sysIndex] : resultsHouse[item.sysIndex];
+        
+        const matchedExistingIds = new Set<string>(sourceResults.frequencies!.map(f => f.id!));
+        const newFreqs: Frequency[] = [...sourceResults.frequencies!];
+        
+        const buckets: {reqs: EquipmentRequest[], type: 'mic' | 'iem'}[] = [ 
+            { reqs: sys.micRequests || [], type: 'mic' }, 
+            { reqs: sys.iemRequests || [], type: 'iem' } 
+        ];
+        if (Math.random() > 0.5) buckets.reverse(); 
+        
+        for (const bucket of buckets) {
+            const shuffledReqs = [...bucket.reqs].sort(() => Math.random() - 0.5);
+            for (const req of shuffledReqs) {
+                const thresholds = req.useManualParams ? { 
+                    fundamental: req.manualFundamental ?? 0.35, 
+                    twoTone: req.manualTwoTone ?? 0.05, 
+                    threeTone: req.manualThreeTone ?? 0.05, 
+                    fiveTone: 0, 
+                    sevenTone: 0 
+                } : getFinalThresholds({ equipmentKey: req.equipmentKey, compatibilityLevel: req.compatibilityLevel }, db, globalOverrides);
+                
+                const profile = db[req.equipmentKey] || db['custom'];
+                const minFreq = (req.equipmentKey === 'custom' && req.customMin) ? req.customMin : profile.minFreq;
+                const maxFreq = (req.equipmentKey === 'custom' && req.customMax) ? req.customMax : profile.maxFreq;
+                
+                const strictMatches = newFreqs.filter(f => f.sourceRequestId === req.id || (!f.sourceRequestId && f.equipmentKey === req.equipmentKey && f.type === bucket.type));
+                let flexMatches: Frequency[] = [];
+                const needed = Math.max(0, req.count - strictMatches.length);
+                if (needed > 0) {
+                    flexMatches = newFreqs.filter(f => !f.sourceRequestId && f.equipmentKey !== req.equipmentKey && f.type === bucket.type && !strictMatches.includes(f)).slice(0, needed);
+                    flexMatches.forEach(f => {
+                        f.sourceRequestId = req.id;
+                        f.equipmentKey = req.equipmentKey;
+                    });
+                }
+                const targetToFind = Math.max(0, req.count - strictMatches.length - flexMatches.length);
+                
+                if (targetToFind > 0) {
+                    const isWmasProfile = profile?.type === 'wmas';
+                    const finalExclusions = getEquipmentAwareExclusions(globalExclusions, isWmasProfile ? 'wmas' : bucket.type, triStates, region);
+                    let candidates = getCandidates(minFreq, maxFreq, profile?.tuningStep || 0.025, finalExclusions, inclusionRanges || null);
+                    
+                    if (calculationStrategy === 'bottom-up') {
+                        // Already sorted bottom-up
+                    } else if (calculationStrategy === 'top-down') {
+                        candidates.reverse();
+                    } else if (calculationStrategy === 'high-density') {
+                        const pattern = Math.random();
+                        if (pattern > 0.75) candidates.reverse();
+                        else if (pattern > 0.5) {
+                            const centerCand = [];
+                            let l = Math.floor(candidates.length / 2) - 1; let r = Math.floor(candidates.length / 2);
+                            while (l >= 0 || r < candidates.length) {
+                                if (r < candidates.length) centerCand.push(candidates[r++]);
+                                if (l >= 0) centerCand.push(candidates[l--]);
+                            }
+                            candidates = centerCand;
+                        } else if (pattern > 0.25) {
+                            const edgeCand = [];
+                            let l = 0; let r = candidates.length - 1;
+                            while(l <= r) {
+                                if (l === r) { edgeCand.push(candidates[l]); break; }
+                                edgeCand.push(candidates[l++]); edgeCand.push(candidates[r--]);
+                            }
+                            candidates = edgeCand;
+                        }
+                    } else {
+                        candidates = shuffleArray(candidates);
+                    }
+
+                    let found = 0;
+                    let checksSinceYield = 0;
+                    for (const val of candidates) {
+                        if (Date.now() - coordStartTime > 120000) throw new Error('TimeoutError: The coordination period exceeded 2 minutes. The app has stopped the process. Please reduce the number of requested frequencies or increase channel spacing.');
+                        if (abortSignal?.aborted) throw new Error('AbortError');
+                        if (found >= targetToFind) break;
+                        
+                        checksSinceYield++;
+                        if (checksSinceYield >= 40) {
+                            await new Promise(r => setTimeout(r, 0));
+                            checksSinceYield = 0;
+                        }
+
+                        // Prevent clashes with existing/coordinated/locked act frequencies (minimum 250kHz guard band)
+                        const tooCloseToActs = acts && acts.some(act => 
+                            (act.frequencies || []).some(f => f.value > 0 && Math.abs(val - f.value) < 0.250)
+                        );
+                        if (tooCloseToActs) continue;
+
+                        if (isExhaustiveCompatibleMutual(val, thresholds, zoneIdx, siteFreqs, distances, db, globalOverrides, 10, req.linearMode, matrix).conflicts.length === 0) {
+                            const fPrefix = item.source === 'constant' ? 'C' : 'H';
+                            const fSource = item.source === 'constant' ? 'constant' : 'house';
+                            const f: Frequency = { 
+                                id: `${fPrefix}-${runNonce}-${sys.stageName}-${newFreqs.length}`, 
+                                label: sys.stageName, 
+                                value: val, 
+                                type: bucket.type, 
+                                sourceRequestId: req.id, 
+                                manualThresholds: req.useManualParams ? thresholds : undefined, 
+                                compatibilityLevel: req.compatibilityLevel,
+                                equipmentKey: req.equipmentKey, 
+                                source: fSource as any, 
+                                zoneIndex: zoneIdx, 
+                                locked: false, 
+                                linearMode: req.linearMode 
+                            };
+                            newFreqs.push(f); siteFreqs.push(f); found++; totalFound++;
+                            
+                            if (found % 10 === 0) {
+                                await new Promise(r => setTimeout(r, 0));
+                                checksSinceYield = 0;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        sourceResults.frequencies = newFreqs;
+        systemsProcessed++;
+        onProgress?.({ found: totalFound, processed: systemsProcessed, total: shuffledInfra.length, status: `Mastering Global Infra: ${sys.stageName}...` });
+    }
+
+    return { constant: resultsConstant, house: resultsHouse };
+};
+
+export const generateConstantFrequencies = async (
+    constant: ConstantSystemRequest[], house: ConstantSystemRequest[], zoneConfigs: ZoneConfig[], distances: number[][],
+    db: Record<string, EquipmentProfile>, exclusions: { min: number, max: number }[], matrix: boolean[][], onProgress?: (p: any) => void,
+    inclusionRanges?: { min: number, max: number }[] | null, globalOverrides?: Record<string, Partial<Thresholds>>, triStates?: Record<number, TVChannelState>, region: 'uk' | 'us' = 'uk',
+    wmasState?: WMASState, calculationStrategy: 'even-distribution' | 'bottom-up' | 'top-down' | 'high-density' = 'even-distribution', abortSignal?: AbortSignal, distanceWeightingEnabled: boolean = true
+): Promise<ConstantSystemRequest[]> => {
+    // For standalone calls, we still respect the presence of all house frequencies to prevent conflicts
+    const coordStartTime = Date.now();
+    const results: ConstantSystemRequest[] = [];
+    const siteFreqs: Frequency[] = [];
+    const runNonce = Math.random().toString(36).substring(2, 6).toUpperCase();
+    
+    if (abortSignal?.aborted) throw new Error('AbortError');
+    house.forEach(s => {
+        const sIdx = zoneConfigs.findIndex(z => z.name.toLowerCase().trim() === (s.stageName || '').toLowerCase().trim());
+        // IMPROVEMENT: Respect ALL existing house frequencies, not just locked ones, 
+        // to prevent constant transmits from blindly jumping on them.
+        s.frequencies?.forEach(f => { if (f.value > 0) siteFreqs.push({ ...f, zoneIndex: sIdx }); }); 
+    });
+
+    const globalExclusions = [...exclusions];
+    if (wmasState && wmasState.nodes) {
+        wmasState.nodes.forEach(node => {
+            if (node.assignedBlock && (node.isHouseSystem !== false)) {
+                globalExclusions.push({ min: node.assignedBlock.start, max: node.assignedBlock.end });
+            }
+        });
+    }
+
+    const shuffledConstants = [...constant].sort(() => Math.random() - 0.5);
+
+    for (let i = 0; i < shuffledConstants.length; i++) {
+        if (abortSignal?.aborted) throw new Error('AbortError');
+        const sys = shuffledConstants[i];
+        const zoneIdx = zoneConfigs.findIndex(z => z.name.toLowerCase().trim() === (sys.stageName || '').toLowerCase().trim());
+        
+        const currentReqIds = new Set<string>([
+            ...(sys.micRequests || []).map(r => r.id),
+            ...(sys.iemRequests || []).map(r => r.id)
+        ]);
+        const lockedFreqs: Frequency[] = (sys.frequencies || []).filter(f => f.locked && f.value > 0).map(f => {
+            if (f.sourceRequestId && !currentReqIds.has(f.sourceRequestId)) {
+                return { ...f, sourceRequestId: undefined };
+            }
+            return f;
+        });
+        const newFreqs: Frequency[] = [];
+        const matchedExistingIds = new Set<string>();
+        
+        const buckets: {reqs: EquipmentRequest[], type: 'mic' | 'iem'}[] = [ { reqs: sys.micRequests || [], type: 'mic' }, { reqs: sys.iemRequests || [], type: 'iem' } ];
+        if (Math.random() > 0.5) buckets.reverse(); // Randomly alternate packing IEMs before Mics to explore permutations
+        
+        for (const bucket of buckets) {
+            const shuffledReqs = [...bucket.reqs].sort(() => Math.random() - 0.5);
+            for (const req of shuffledReqs) {
+                const thresholds = req.useManualParams ? { fundamental: req.manualFundamental ?? 0.35, twoTone: req.manualTwoTone ?? 0.05, threeTone: req.manualThreeTone ?? 0.05, fiveTone: 0, sevenTone: 0 } : getFinalThresholds({ equipmentKey: req.equipmentKey, compatibilityLevel: req.compatibilityLevel }, db, globalOverrides);
+                const profile = db[req.equipmentKey] || db['custom'];
+                const minFreq = (req.equipmentKey === 'custom' && req.customMin) ? req.customMin : profile.minFreq;
+                const maxFreq = (req.equipmentKey === 'custom' && req.customMax) ? req.customMax : profile.maxFreq;
+                
+                const strictMatches = lockedFreqs.filter(f => {
+                    if (matchedExistingIds.has(f.id!)) return false;
+                    const fType = f.type || 'mic';
+                    if (f.sourceRequestId && req.id && f.sourceRequestId === req.id && f.equipmentKey === req.equipmentKey && fType === bucket.type) return true;
+                    if (!f.sourceRequestId && f.equipmentKey === req.equipmentKey && fType === bucket.type) return true;
+                    return false;
+                }).slice(0, req.count);
+                
+                let flexMatches: Frequency[] = [];
+                const needed = Math.max(0, req.count - strictMatches.length);
+                if (needed > 0) {
+                    flexMatches = lockedFreqs.filter(f => {
+                        if (matchedExistingIds.has(f.id!) || strictMatches.includes(f)) return false;
+                        const fType = f.type || 'mic';
+                        if (!f.sourceRequestId && f.equipmentKey !== req.equipmentKey && fType === bucket.type) return true;
+                        return false;
+                    }).slice(0, needed);
+                }
+
+                const matches = [...strictMatches, ...flexMatches];
+                
+                matches.forEach(m => {
+                    matchedExistingIds.add(m.id!);
+                    const updatedM = { ...m, zoneIndex: zoneIdx, sourceRequestId: req.id, equipmentKey: req.equipmentKey };
+                    newFreqs.push(updatedM);
+                    siteFreqs.push(updatedM);
+                });
+                
+                const targetToFind = Math.max(0, req.count - matches.length);
+                
+                // Determine actual type to be used, but keep f.type as the bucket type for UI placement
+                const isWmasProfile = profile?.type === 'wmas';
+
+                if (targetToFind > 0) {
+                    const finalExclusions = getEquipmentAwareExclusions(globalExclusions, isWmasProfile ? 'wmas' : bucket.type, triStates, region);
+                    let candidates = getCandidates(minFreq, maxFreq, profile?.tuningStep || 0.025, finalExclusions, inclusionRanges || null);
+                    if (calculationStrategy === 'bottom-up') {
+                        // Already sorted
+                    } else if (calculationStrategy === 'top-down') {
+                        candidates.reverse();
+                    } else if (calculationStrategy === 'high-density') {
+                        const pattern = Math.random();
+                        if (pattern > 0.75) {
+                            candidates.reverse();
+                        } else if (pattern > 0.5) {
+                            const centerCand = [];
+                            let l = Math.floor(candidates.length / 2) - 1; let r = Math.floor(candidates.length / 2);
+                            while (l >= 0 || r < candidates.length) {
+                                if (r < candidates.length) centerCand.push(candidates[r++]);
+                                if (l >= 0) centerCand.push(candidates[l--]);
+                            }
+                            candidates = centerCand;
+                        } else if (pattern > 0.25) {
+                            const edgeCand = [];
+                            let l = 0; let r = candidates.length - 1;
+                            while(l <= r) {
+                                if (l === r) { edgeCand.push(candidates[l]); break; }
+                                edgeCand.push(candidates[l++]); edgeCand.push(candidates[r--]);
+                            }
+                            candidates = edgeCand;
+                        }
+                    } else {
+                        candidates = shuffleArray(candidates);
+                    }
+                    let found = 0;
+                    let checksSinceYield = 0;
+                    for (const val of candidates) {
+                        if (Date.now() - coordStartTime > 120000) throw new Error('TimeoutError: The coordination period exceeded 2 minutes. The app has stopped the process. Please reduce the number of requested frequencies or increase channel spacing.');
+                        if (abortSignal?.aborted) throw new Error('AbortError');
+                        if (found >= targetToFind) break;
+                        
+                        checksSinceYield++;
+                        if (checksSinceYield >= 40) {
+                            await new Promise(r => setTimeout(r, 0));
+                            checksSinceYield = 0;
+                        }
+
+                        const unaddedLocked = lockedFreqs.filter(lf => !matchedExistingIds.has(lf.id!));
+                        const validationPool = [...siteFreqs, ...unaddedLocked];
+
+                        if (isExhaustiveCompatibleMutual(val, thresholds, zoneIdx, validationPool, distances, db, globalOverrides, 10, req.linearMode, matrix, distanceWeightingEnabled).conflicts.length === 0) {
+                            const f: Frequency = { id: `C-${runNonce}-${sys.stageName}-${newFreqs.length}`, label: sys.stageName, value: val, type: bucket.type, sourceRequestId: req.id, manualThresholds: req.useManualParams ? thresholds : undefined, equipmentKey: req.equipmentKey, source: 'constant' as const, zoneIndex: zoneIdx, locked: false, linearMode: req.linearMode };
+                            newFreqs.push(f); siteFreqs.push(f); found++;
+                            
+                            // Prevent UI blocking every few placements
+                            if (found % 10 === 0) {
+                                await new Promise(r => setTimeout(r, 0));
+                                checksSinceYield = 0;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Add manual frequencies that were not generated by a specific request
+        lockedFreqs.forEach(f => {
+            if (!f.sourceRequestId && !matchedExistingIds.has(f.id!)) {
+                const updatedF = { ...f, zoneIndex: zoneIdx };
+                newFreqs.push(updatedF);
+                siteFreqs.push(updatedF);
+                matchedExistingIds.add(f.id!);
+            }
+        });
+
+        results.push({ ...sys, frequencies: newFreqs });
+        onProgress?.({ found: 0, processed: i + 1, total: constant.length, status: `Configuring ${sys.stageName}...` });
+    }
+    
+    // Restore original array order so that UI stages don't swap around randomly
+    return constant.map(originalSys => results.find(r => r.stageName === originalSys.stageName)!);
+};
+
+export const generateGlobalOnlyFrequencies = async (
+    state: TourPlanningState,
+    db: Record<string, EquipmentProfile>,
+    equipmentOverrides: Record<string, Partial<Thresholds>>,
+    onProgress?: (p: number) => void
+): Promise<Frequency[]> => {
+    const { constantSystems, region } = state;
+    const globalTvStates: Record<number, TVChannelState> = { ...(state.globalTvChannelStates || {}) };
+
+    // --- STRICT MODE FOR GLOBAL GEAR ---
+    // If the user has explicitly assigned roles (mic-only or iem-only) to any channels,
+    // we enter Strict Mode where all 'available' (unassigned) channels are blocked.
+    // This ensures the engine ONLY uses the channels the user has "chosen".
+    const hasExplicitAssignments = Object.values(globalTvStates).some(s => s === 'mic-only' || s === 'iem-only');
+    if (hasExplicitAssignments) {
+        const allChannels = region === 'uk' ? UK_TV_CHANNELS : US_TV_CHANNELS;
+        Object.keys(allChannels).forEach(chStr => {
+            const ch = parseInt(chStr);
+            if (!globalTvStates[ch] || globalTvStates[ch] === 'available') {
+                globalTvStates[ch] = 'blocked';
+            }
+        });
+    }
+
+    if (onProgress) onProgress(0.1);
+
+    const constantResults = await generateConstantFrequencies(
+        [{ ...constantSystems, frequencies: (constantSystems.frequencies || []).filter(f => f.locked) }],
+        [], 
+        [{ name: constantSystems.stageName, count: 0 }], 
+        [[0]], 
+        db,
+        [], 
+        [[true]], 
+        undefined,
+        null,
+        equipmentOverrides,
+        globalTvStates, 
+        region
+    );
+
+    if (onProgress) onProgress(1);
+    return constantResults[0].frequencies || [];
+};
+
+export const generateTourFrequencies = async (
+    state: TourPlanningState,
+    db: Record<string, EquipmentProfile>,
+    equipmentOverrides: Record<string, Partial<Thresholds>>,
+    onProgress?: (p: number) => void
+): Promise<{ globalConstantFreqs: Frequency[], localFreqs: Frequency[] }> => {
+    const { constantSystems, stops, localRequests, region } = state;
+
+    if (onProgress) onProgress(0.05);
+
+    // 1. Use Global TV Exclusions for Constant Transmits (Touring Rack)
+    let globalTvStates: Record<number, TVChannelState> = state.globalTvChannelStates || {};
+
+    // 2. Calculate Global Constant Transmits (Touring Rack)
+    // If we already have frequencies and they are locked, we keep them.
+    // Otherwise, we re-calculate them here.
+    let globalConstantFreqs = constantSystems.frequencies || [];
+    const hasCalculatedGlobal = globalConstantFreqs.length > 0;
+
+    if (!hasCalculatedGlobal) {
+        // --- STRICT MODE FOR GLOBAL GEAR ---
+        const hasExplicitAssignments = Object.values(globalTvStates).some(s => s === 'mic-only' || s === 'iem-only');
+        if (hasExplicitAssignments) {
+            const allChannels = region === 'uk' ? UK_TV_CHANNELS : US_TV_CHANNELS;
+            Object.keys(allChannels).forEach(chStr => {
+                const ch = parseInt(chStr);
+                if (!globalTvStates[ch] || globalTvStates[ch] === 'available') {
+                    // Do not block unselected channels
+                }
+            });
+        }
+
+        const constantResults = await generateConstantFrequencies(
+            [{ ...constantSystems, frequencies: (constantSystems.frequencies || []).filter(f => f.locked) }],
+            [], 
+            [{ name: constantSystems.stageName, count: 0 }], 
+            [[0]], 
+            db,
+            [], 
+            [[true]], 
+            undefined,
+            null,
+            equipmentOverrides,
+            globalTvStates, 
+            region
+        );
+        globalConstantFreqs = constantResults[0].frequencies || [];
+    }
+    
+    if (onProgress) onProgress(0.2);
+
+    // AGGREGATE TV STATES FROM ALL STOPS
+    const aggregatedTvStates: Record<number, TVChannelState> = { ...globalTvStates };
+    
+    stops.forEach(stop => {
+        if (!stop.tvChannelStates) return;
+        Object.entries(stop.tvChannelStates).forEach(([ch, tvState]) => {
+            const channel = parseInt(ch);
+            const current = aggregatedTvStates[channel] || 'available';
+            
+            const erp = stop.tvChannelErpData?.[channel]?.maxErp || 0;
+            // A channel is only truly "blocked" if it has high ERP (> 10kW)
+            const isHardBlock = tvState === 'blocked' && erp > 10;
+            // Secondary (<= 1kW) and Tertiary (<= 10kW) are "soft blocks"
+            const isSoftBlock = tvState === 'blocked' && erp <= 10;
+
+            if (isHardBlock || current === 'blocked') {
+                aggregatedTvStates[channel] = 'blocked';
+            } else if (isSoftBlock) {
+                // Soft blocks are allowed by default, unless explicitly blocked
+                const selection = state.optimizedChannelSelections?.[channel];
+                if (selection && !selection.selected) {
+                    aggregatedTvStates[channel] = 'blocked';
+                }
+            } else if ((tvState === 'mic-only' && current === 'iem-only') || (tvState === 'iem-only' && current === 'mic-only')) {
+                // Do not globally block on clashes, let local rules handle it
+            } else if (tvState === 'mic-only' || tvState === 'iem-only') {
+                // Respect local stop restrictions if no global override exists
+                if (!state.optimizedChannelSelections || !state.optimizedChannelSelections[channel]) {
+                    aggregatedTvStates[channel] = tvState;
+                }
+            }
+        });
+    });
+
+    // --- SMART TOUR OPTIMIZATION: RE-VALIDATION OF USER SELECTIONS ---
+    const hasActiveSelections = state.optimizedChannelSelections && 
+        Object.values(state.optimizedChannelSelections).some(s => s.selected);
+
+    if (hasActiveSelections) {
+        const selections = state.optimizedChannelSelections!;
+        const allPossibleChannels = region === 'uk' ? Object.keys(UK_TV_CHANNELS) : Object.keys(US_TV_CHANNELS);
+        
+        allPossibleChannels.forEach(chStr => {
+            const ch = parseInt(chStr);
+            const selection = selections[ch];
+            
+            if (selection && selection.selected) {
+                // If selected, we respect the equipment type.
+                // However, we still respect hard blocks from stops.
+                if (aggregatedTvStates[ch] !== 'blocked') {
+                    aggregatedTvStates[ch] = selection.type === 'mic' ? 'mic-only' : 'iem-only';
+                }
+            } else {
+                // Do not block unselected channels
+            }
+        });
+    } else if (state.optimizedChannelSelections) {
+        // If the optimizer state exists but nothing is selected, we should be 
+        // conservative and only allow Primary (available) channels.
+        // This prevents the app from "randomly" using all 12 channels by default.
+        Object.keys(aggregatedTvStates).forEach(chStr => {
+            const ch = parseInt(chStr);
+            const state = aggregatedTvStates[ch];
+            // If it's not a Primary channel (available) or already restricted, block it.
+            // This effectively blocks Secondary and Tertiary channels until they are checked.
+            if (state !== 'available' && state !== 'mic-only' && state !== 'iem-only') {
+                // aggregatedTvStates[ch] = 'blocked'; // Relaxed: Do not auto-block
+            }
+        });
+    }
+
+    // --- SMART TOUR OPTIMIZATION: MASTER LOCAL POOL ---
+    const masterGenRequests = localRequests.map(req => {
+        const profile = db[req.equipmentKey] || db['custom'];
+        const minFreq = (req.equipmentKey === 'custom' && req.customMin) ? req.customMin : profile.minFreq;
+        const maxFreq = (req.equipmentKey === 'custom' && req.customMax) ? req.customMax : profile.maxFreq;
+        return {
+            id: `master-${req.equipmentKey}`,
+            key: req.equipmentKey,
+            count: req.count,
+            customMin: minFreq,
+            customMax: maxFreq,
+            compatibilityLevel: req.compatibilityLevel,
+            linearMode: req.linearMode,
+            useManualParams: req.useManualParams,
+            manualFundamental: req.manualFundamental,
+            manualTwoTone: req.manualTwoTone,
+            manualThreeTone: req.manualThreeTone,
+            type: req.type || (profile?.type as TxType) || 'generic'
+        };
+    });
+
+    // Generate the Local Pool using AGGREGATED TV states
+    const localFreqs = await resolveGeneratorRequests(
+        masterGenRequests,
+        globalConstantFreqs,
+        db,
+        [],
+        null,
+        true,
+        false,
+        (p) => onProgress?.(0.2 + p * 0.8),
+        (state.localFrequencies || []).filter(f => f.locked),
+        equipmentOverrides,
+        undefined,
+        false,
+        aggregatedTvStates,
+        region
+    );
+
+    // Filter out the constants from the pool to get only the local ones
+    const localOnly = localFreqs.filter(f => !globalConstantFreqs.some(cf => cf.id === f.id));
+
+    if (onProgress) onProgress(1);
+
+    return { globalConstantFreqs, localFreqs: localOnly };
+};
+
+export const generateHouseSystemsFrequencies = async (
+    house: ConstantSystemRequest[], constants: ConstantSystemRequest[], zoneConfigs: ZoneConfig[], distances: number[][],
+    db: Record<string, EquipmentProfile>, exclusions: { min: number, max: number }[], matrix: boolean[][], onProgress?: (p: any) => void,
+    inclusionRanges?: { min: number, max: number }[] | null, globalOverrides?: Record<string, Partial<Thresholds>>, triStates?: Record<number, TVChannelState>, region: 'uk' | 'us' = 'uk',
+    wmasState?: WMASState, calculationStrategy: 'even-distribution' | 'bottom-up' | 'top-down' | 'high-density' = 'even-distribution', acts?: FestivalAct[], abortSignal?: AbortSignal, distanceWeightingEnabled: boolean = true
+): Promise<ConstantSystemRequest[]> => {
+    const results: ConstantSystemRequest[] = [];
+    const siteFreqs: Frequency[] = [];
+    
+    if (abortSignal?.aborted) throw new Error('AbortError');
+    constants.forEach(s => {
+        const sIdx = zoneConfigs.findIndex(z => z.name.toLowerCase().trim() === (s.stageName || '').toLowerCase().trim());
+        s.frequencies?.forEach(f => { if (f.value > 0) siteFreqs.push({ ...f, zoneIndex: sIdx }); }); 
+    });
+    
+    // We do NOT blindly push all locked house frequencies into siteFreqs anymore 
+    // because some might be orphaned by requirement changes.
+    // Instead we collect the valid ones as we process.
+    
+    const runNonce = Math.random().toString(36).substring(2, 6).toUpperCase();
+
+    const globalExclusions = [...exclusions];
+    if (wmasState && wmasState.nodes) {
+        wmasState.nodes.forEach(node => {
+            if (node.assignedBlock && (node.isHouseSystem !== false)) {
+                globalExclusions.push({ min: node.assignedBlock.start, max: node.assignedBlock.end });
+            }
+        });
+    }
+
+    const shuffledHouse = [...house].sort(() => Math.random() - 0.5);
+
+    for (let i = 0; i < shuffledHouse.length; i++) {
+        if (abortSignal?.aborted) throw new Error('AbortError');
+        const sys = shuffledHouse[i];
+        const zoneIdx = zoneConfigs.findIndex(z => z.name.toLowerCase().trim() === (sys.stageName || '').toLowerCase().trim());
+        
+        const currentReqIds = new Set<string>([
+            ...(sys.micRequests || []).map(r => r.id),
+            ...(sys.iemRequests || []).map(r => r.id)
+        ]);
+        const lockedFreqs: Frequency[] = (sys.frequencies || []).filter(f => f.locked && f.value > 0).map(f => {
+            if (f.sourceRequestId && !currentReqIds.has(f.sourceRequestId)) {
+                return { ...f, sourceRequestId: undefined };
+            }
+            return f;
+        });
+        const newFreqs: Frequency[] = [];
+        const matchedExistingIds = new Set<string>();
+        
+        const buckets: {reqs: EquipmentRequest[], type: 'mic' | 'iem'}[] = [ { reqs: sys.micRequests || [], type: 'mic' }, { reqs: sys.iemRequests || [], type: 'iem' } ];
+        if (Math.random() > 0.5) buckets.reverse(); // Randomly alternate packing IEMs before Mics
+        
+        for (const bucket of buckets) {
+            const shuffledReqs = [...bucket.reqs].sort(() => Math.random() - 0.5);
+            for (const req of shuffledReqs) {
+                const thresholds = req.useManualParams ? { fundamental: req.manualFundamental ?? 0.35, twoTone: req.manualTwoTone ?? 0.05, threeTone: req.manualThreeTone ?? 0.05, fiveTone: 0, sevenTone: 0 } : getFinalThresholds({ equipmentKey: req.equipmentKey, compatibilityLevel: req.compatibilityLevel }, db, globalOverrides);
+                const profile = db[req.equipmentKey] || db['custom'];
+                const minFreq = (req.equipmentKey === 'custom' && req.customMin) ? req.customMin : profile.minFreq;
+                const maxFreq = (req.equipmentKey === 'custom' && req.customMax) ? req.customMax : profile.maxFreq;
+                
+                const strictMatches = lockedFreqs.filter(f => {
+                    if (matchedExistingIds.has(f.id!)) return false;
+                    const fType = f.type || 'mic';
+                    if (f.sourceRequestId && req.id && f.sourceRequestId === req.id && f.equipmentKey === req.equipmentKey && fType === bucket.type) return true;
+                    if (!f.sourceRequestId && f.equipmentKey === req.equipmentKey && fType === bucket.type) return true;
+                    return false;
+                }).slice(0, req.count);
+                
+                let flexMatches: Frequency[] = [];
+                const needed = Math.max(0, req.count - strictMatches.length);
+                if (needed > 0) {
+                    flexMatches = lockedFreqs.filter(f => {
+                        if (matchedExistingIds.has(f.id!) || strictMatches.includes(f)) return false;
+                        const fType = f.type || 'mic';
+                        if (!f.sourceRequestId && f.equipmentKey !== req.equipmentKey && fType === bucket.type) return true;
+                        return false;
+                    }).slice(0, needed);
+                }
+
+                const matches = [...strictMatches, ...flexMatches];
+                
+                matches.forEach(m => {
+                    matchedExistingIds.add(m.id!);
+                    const updatedM = { ...m, zoneIndex: zoneIdx, sourceRequestId: req.id, equipmentKey: req.equipmentKey };
+                    newFreqs.push(updatedM);
+                    siteFreqs.push(updatedM); // Now it's a valid locked freq, add it to siteFreqs to avoid clashes
+                });
+                
+                const targetToFind = Math.max(0, req.count - matches.length);
+                
+                // Determine actual type to be used, but keep f.type as the bucket type for UI placement
+                const isWmasProfile = profile?.type === 'wmas';
+
+                if (targetToFind > 0) {
+                    const finalExclusions = getEquipmentAwareExclusions(globalExclusions, isWmasProfile ? 'wmas' : bucket.type, triStates, region);
+                    let candidates = getCandidates(minFreq, maxFreq, profile?.tuningStep || 0.025, finalExclusions, inclusionRanges || null);
+                    if (calculationStrategy === 'bottom-up') {
+                        // Already sorted
+                    } else if (calculationStrategy === 'top-down') {
+                        candidates.reverse();
+                    } else if (calculationStrategy === 'high-density') {
+                        const pattern = Math.random();
+                        if (pattern > 0.75) {
+                            candidates.reverse();
+                        } else if (pattern > 0.5) {
+                            const centerCand = [];
+                            let l = Math.floor(candidates.length / 2) - 1; let r = Math.floor(candidates.length / 2);
+                            while (l >= 0 || r < candidates.length) {
+                                if (r < candidates.length) centerCand.push(candidates[r++]);
+                                if (l >= 0) centerCand.push(candidates[l--]);
+                            }
+                            candidates = centerCand;
+                        } else if (pattern > 0.25) {
+                            const edgeCand = [];
+                            let l = 0; let r = candidates.length - 1;
+                            while(l <= r) {
+                                if (l === r) { edgeCand.push(candidates[l]); break; }
+                                edgeCand.push(candidates[l++]); edgeCand.push(candidates[r--]);
+                            }
+                            candidates = edgeCand;
+                        }
+                    } else {
+                        candidates = shuffleArray(candidates);
+                    }
+                    let found = 0;
+                    let checksSinceYield = 0;
+                    for (const val of candidates) {
+                        if (abortSignal?.aborted) throw new Error('AbortError');
+                        if (found >= targetToFind) break;
+
+                        checksSinceYield++;
+                        if (checksSinceYield >= 40) {
+                            await new Promise(r => setTimeout(r, 0));
+                            checksSinceYield = 0;
+                        }
+
+                        const unaddedLocked = lockedFreqs.filter(lf => !matchedExistingIds.has(lf.id!));
+                        const validationPool = [...siteFreqs, ...unaddedLocked].map(f => ({
+                            ...f,
+                            _ignoreImdWithCandidate: (f.source === 'house') ? (f.zoneIndex !== zoneIdx) : !!f._ignoreImdWithCandidate
+                        }));
+
+                        // Prevent clashes with existing/coordinated/locked act frequencies (minimum 250kHz guard band)
+                        const tooCloseToActs = acts && acts.some(act => 
+                            (act.frequencies || []).some(f => f.value > 0 && Math.abs(val - f.value) < 0.250)
+                        );
+                        if (tooCloseToActs) continue;
+
+                        if (isExhaustiveCompatibleMutual(val, thresholds, zoneIdx, validationPool, distances, db, globalOverrides, 10, req.linearMode, matrix, distanceWeightingEnabled).conflicts.length === 0) {
+                            const f: Frequency = { id: `H-${runNonce}-${sys.stageName}-${newFreqs.length}`, label: sys.stageName, value: val, type: bucket.type, sourceRequestId: req.id, manualThresholds: req.useManualParams ? thresholds : undefined, compatibilityLevel: req.compatibilityLevel, equipmentKey: req.equipmentKey, source: 'house' as const, zoneIndex: zoneIdx, locked: false, linearMode: req.linearMode };
+                            newFreqs.push(f); siteFreqs.push(f); found++;
+                            
+                            // Yield to browser
+                            if (found % 10 === 0) {
+                                await new Promise(r => setTimeout(r, 0));
+                                checksSinceYield = 0;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Add manual frequencies that were not generated by a specific request
+        lockedFreqs.forEach(f => {
+            if (!f.sourceRequestId && !matchedExistingIds.has(f.id!)) {
+                const updatedF = { ...f, zoneIndex: zoneIdx };
+                newFreqs.push(updatedF);
+                siteFreqs.push(updatedF);
+                matchedExistingIds.add(f.id!);
+            }
+        });
+
+        results.push({ ...sys, frequencies: newFreqs });
+        onProgress?.({ found: 0, processed: i + 1, total: house.length, status: `Patching House ${sys.stageName}...` });
+    }
+    
+    // Restore original array order so that UI stages don't swap around randomly
+    return house.map(originalSys => results.find(r => r.stageName === originalSys.stageName)!);
+};
+
+export const generateFestivalPlan = async (
+    acts: FestivalAct[], constants: ConstantSystemRequest[], house: ConstantSystemRequest[], zoneConfigs: ZoneConfig[], distances: number[][],
+    overlapMinutes: number, db: Record<string, EquipmentProfile>, exclusions: { min: number, max: number }[], matrix: boolean[][],
+    onProgress?: (p: { found: number, processed: number, total: number, totalRequested: number, status?: string }) => void, onStatus?: (s: string) => void,
+    inclusionRanges?: { min: number, max: number }[] | null, globalOverrides?: Record<string, Partial<Thresholds>>, triStates?: Record<number, TVChannelState>, region: 'uk' | 'us' = 'uk',
+    wmasState?: WMASState, calculationStrategy: 'even-distribution' | 'bottom-up' | 'top-down' | 'high-density' = 'even-distribution', abortSignal?: AbortSignal, distanceWeightingEnabled: boolean = true,
+    actIntermodMatrix?: Record<string, Record<string, boolean>>
+): Promise<{ results: FestivalAct[], report: OptimizationReport }> => {
+    const coordStartTime = Date.now();
+    const resultsMap = new Map<string, FestivalAct>();
+    const constantFreqs: Frequency[] = [];
+    const houseFreqs: Frequency[] = [];
+    const stats: BottleneckStats = { totalRejections: 0, fundamentalHits: 0, imd2Hits: 0, imd3Hits: 0, exclusionHits: 0, temporalSaturation: 0 };
+    
+    if (abortSignal?.aborted) throw new Error('AbortError');
+    
+    // First pass to count total frequency requests
+    let totalRequested = 0;
+    let micsRequested = 0;
+    let iemsRequested = 0;
+    
+    constants.forEach(s => { 
+        (s.micRequests || []).forEach(r => { totalRequested += r.count; micsRequested += r.count; });
+        (s.iemRequests || []).forEach(r => { totalRequested += r.count; iemsRequested += r.count; });
+        const sIdx = zoneConfigs.findIndex(z => z.name.toLowerCase().trim() === (s.stageName || '').toLowerCase().trim());
+        s.frequencies?.forEach(f => { if (f.value > 0) constantFreqs.push({ ...f, zoneIndex: sIdx }); }); 
+    });
+    house.forEach(s => { 
+        (s.micRequests || []).forEach(r => { totalRequested += r.count; micsRequested += r.count; });
+        (s.iemRequests || []).forEach(r => { totalRequested += r.count; iemsRequested += r.count; });
+        const sIdx = zoneConfigs.findIndex(z => z.name.toLowerCase().trim() === (s.stageName || '').toLowerCase().trim());
+        s.frequencies?.forEach(f => { if (f.value > 0) houseFreqs.push({ ...f, zoneIndex: sIdx }); }); 
+    });
+    acts.forEach(act => { 
+        (act.micRequests || []).forEach(r => { totalRequested += r.count; micsRequested += r.count; });
+        (act.iemRequests || []).forEach(r => { totalRequested += r.count; iemsRequested += r.count; });
+    });
+
+    const runNonce = Math.random().toString(36).substring(2, 6).toUpperCase();
+    
+    // Shuffle first, then sort by priority, so ties are broken randomly on each iteration
+    let prioritySortedActs = [...acts].sort(() => Math.random() - 0.5);
+    
+    // In High-Density mode, deliberately ignore priority sorting 25% of the time to explore fundamentally different timelines
+    const skipPrioritySort = calculationStrategy === 'high-density' && Math.random() > 0.75;
+    
+    if (!skipPrioritySort) {
+        prioritySortedActs = prioritySortedActs.sort((a, b) => {
+            const aDiff = [...a.micRequests, ...a.iemRequests].some(r => r.useManualParams || r.compatibilityLevel === 'aggressive') ? -1 : 1;
+            const bDiff = [...b.micRequests, ...b.iemRequests].some(r => r.useManualParams || r.compatibilityLevel === 'aggressive') ? -1 : 1;
+            return aDiff - bDiff;
+        });
+    }
+
+    let frequenciesProcessed = 0;
+    
+    for (let i = 0; i < prioritySortedActs.length; i++) {
+        if (Date.now() - coordStartTime > 120000) throw new Error('TimeoutError: The coordination period exceeded 2 minutes. The app has stopped the process. Please reduce the number of requested frequencies or increase channel spacing.');
+        if (abortSignal?.aborted) throw new Error('AbortError');
+        const act = prioritySortedActs[i];
+        const stageIdx = zoneConfigs.findIndex(z => z.name.toLowerCase().trim() === (act.stage || '').toLowerCase().trim());
+        const actReqIds = new Set<string>([
+            ...(act.micRequests || []).map(r => r.id),
+            ...(act.iemRequests || []).map(r => r.id)
+        ]);
+        const lockedFreqs: Frequency[] = (act.frequencies || []).filter(f => f.locked && f.value > 0).map(f => {
+            const updatedF = { ...f, zoneIndex: stageIdx };
+            if (updatedF.sourceRequestId && !actReqIds.has(updatedF.sourceRequestId)) {
+                updatedF.sourceRequestId = undefined;
+            }
+            return updatedF;
+        });
+        const newFreqs: Frequency[] = [];
+        const matchedExistingIds = new Set<string>();
+        const buffer = overlapMinutes * 60000;
+        
+        // Find consecutive acts on the same stage
+        const sameStageActs = acts.filter(a => (a.stage || '').toLowerCase().trim() === (act.stage || '').toLowerCase().trim());
+        const hasOrderNumbers = act.orderNumber !== undefined && sameStageActs.some(a => a.orderNumber !== undefined);
+
+        let consecutiveActIds = new Set<string>();
+        if (hasOrderNumbers) {
+            const actOrder = act.orderNumber!;
+            sameStageActs.forEach(a => {
+                if (a.orderNumber === actOrder - 1 || a.orderNumber === actOrder + 1) {
+                    consecutiveActIds.add(a.id);
+                }
+            });
+        } else {
+            // Current logic (fallback/chronological)
+            const sameStageActsChronological = sameStageActs
+                .sort((a, b) => ensureValidDate(a.startTime).getTime() - ensureValidDate(b.startTime).getTime());
+            const actIndexInSameStage = sameStageActsChronological.findIndex(a => a.id === act.id);
+            if (actIndexInSameStage > 0) consecutiveActIds.add(sameStageActsChronological[actIndexInSameStage - 1].id);
+            if (actIndexInSameStage < sameStageActsChronological.length - 1) consecutiveActIds.add(sameStageActsChronological[actIndexInSameStage + 1].id);
+        }
+
+        const relatedActs = Array.from(resultsMap.values()).filter(other => {
+            const actStart = ensureValidDate(act.startTime).getTime();
+            const actEnd = ensureValidDate(act.endTime).getTime();
+            const otherStart = ensureValidDate(other.startTime).getTime();
+            const otherEnd = ensureValidDate(other.endTime).getTime();
+            
+            const isTimeOverlap = actStart <= (otherEnd + buffer) && otherStart <= (actEnd + buffer);
+            const isConsecutive = consecutiveActIds.has(other.id);
+            const isForcedIntermod = actIntermodMatrix?.[act.id]?.[other.id] || actIntermodMatrix?.[other.id]?.[act.id] || false;
+            
+            return isTimeOverlap || isConsecutive || isForcedIntermod;
+        });
+        
+        const otherActsPool: Frequency[] = relatedActs.flatMap(other => {
+            const actStart = ensureValidDate(act.startTime).getTime();
+            const actEnd = ensureValidDate(act.endTime).getTime();
+            const otherStart = ensureValidDate(other.startTime).getTime();
+            const otherEnd = ensureValidDate(other.endTime).getTime();
+            
+            const actualTimeOverlap = actStart < otherEnd && otherStart < actEnd;
+            const isForcedIntermod = actIntermodMatrix?.[act.id]?.[other.id] || actIntermodMatrix?.[other.id]?.[act.id] || false;
+            const isConsecutiveOrSameStage = !actualTimeOverlap && !isForcedIntermod;
+
+            return (other.frequencies || []).map(f => ({
+                ...f,
+                _ignoreImdWithCandidate: isConsecutiveOrSameStage ? true : f._ignoreImdWithCandidate,
+                _isConsecutive: consecutiveActIds.has(other.id)
+            }));
+        });
+        
+        // Calculate legacy fallback
+        const isMuteAll = act.muteHouseFrequencies || (act.muteHouseMics && act.muteHouseIems);
+
+        // Site-wide house pools with stage-specific muting logic
+        const houseMicPool = houseFreqs.filter(f => f.type === 'mic' && (!act.muteHouseMics || f.zoneIndex !== stageIdx) && (!act.muteHouseFrequencies || f.zoneIndex !== stageIdx));
+        const houseIemPool = houseFreqs.filter(f => f.type === 'iem' && (!act.muteHouseIems || f.zoneIndex !== stageIdx) && (!act.muteHouseFrequencies || f.zoneIndex !== stageIdx));
+
+        const staticPool: Frequency[] = [...constantFreqs];
+        
+        const requestTypes: {reqs: EquipmentRequest[], type: 'mic' | 'iem'}[] = [{ reqs: act.micRequests || [], type: 'mic' }, { reqs: act.iemRequests || [], type: 'iem' }];
+        if (Math.random() > 0.5) requestTypes.reverse();
+        
+        // Calculate relevant WMAS exclusions for THIS act
+        const actExclusions = [...exclusions];
+        if (wmasState && wmasState.nodes) {
+            wmasState.nodes.forEach(node => {
+                if (node.assignedBlock) {
+                    let isExclusion = false;
+                    const isHouseNode = node.isHouseSystem !== false;
+
+                    if (isHouseNode) {
+                        // Respect stage-specific muting for WMAS house systems
+                        const isMatch = (node.stage || '').toLowerCase().trim() === (act.stage || '').toLowerCase().trim();
+                        if (!isMuteAll || !isMatch) {
+                            isExclusion = true;
+                        }
+                    } else if (node.startTime && node.endTime) {
+                        // Check for temporal overlap
+                        const wmasStart = new Date(node.startTime).getTime();
+                        const wmasEnd = new Date(node.endTime).getTime();
+                        const actStart = ensureValidDate(act.startTime).getTime();
+                        const actEnd = ensureValidDate(act.endTime).getTime();
+                        
+                        if (actStart <= (wmasEnd + buffer) && wmasStart <= (actEnd + buffer)) {
+                            // Also respect stage-specific compatibility if it's a guest node? 
+                            // Usually guest nodes are treated as global exclusions if they overlap in time.
+                            isExclusion = true;
+                        }
+                    }
+                    
+                    if (isExclusion) {
+                        actExclusions.push({ min: node.assignedBlock.start, max: node.assignedBlock.end });
+                    }
+                }
+            });
+        }
+
+        // Prepare WMAS tracking for this act
+        const allocatedWmasMicCount = (wmasState?.nodes || []).filter(n => 
+            n.assignedBlock && 
+            n.mode !== 'low-latency' &&
+            n.actName?.trim().toLowerCase() === act.actName.trim().toLowerCase()
+        ).length;
+        
+        const allocatedWmasIemCount = (wmasState?.nodes || []).filter(n => 
+            n.assignedBlock && 
+            n.mode === 'low-latency' &&
+            n.actName?.trim().toLowerCase() === act.actName.trim().toLowerCase()
+        ).length;
+
+        let remainingWmasMics = allocatedWmasMicCount;
+        let remainingWmasIems = allocatedWmasIemCount;
+
+        for (const bucket of requestTypes) {
+            const shuffledReqs = [...bucket.reqs].sort(() => Math.random() - 0.5);
+            for (const req of shuffledReqs) {
+                const thresholds = req.useManualParams ? { 
+                    fundamental: req.manualFundamental ?? 0.35, 
+                    twoTone: req.manualTwoTone ?? 0.05, 
+                    threeTone: req.manualThreeTone ?? 0.05, 
+                    fiveTone: req.manualFiveTone ?? 0, 
+                    sevenTone: req.manualSevenTone ?? 0 
+                } : getFinalThresholds({ equipmentKey: req.equipmentKey, compatibilityLevel: req.compatibilityLevel }, db, globalOverrides);
+                const profile = db[req.equipmentKey] || db['custom'];
+                const minFreq = (req.equipmentKey === 'custom' && req.customMin) ? req.customMin : profile.minFreq;
+                const maxFreq = (req.equipmentKey === 'custom' && req.customMax) ? req.customMax : profile.maxFreq;
+                
+                const matches = lockedFreqs.filter(f => {
+                    if (matchedExistingIds.has(f.id!)) return false;
+                    const fType = f.type || 'mic';
+                    if (fType !== bucket.type) return false;
+
+                    // 1. Strict match by sourceRequestId
+                    if (f.sourceRequestId && req.id && f.sourceRequestId === req.id) return true;
+                    
+                    // 2. Exact match by equipmentKey (for manual freqs that happened to select the right gear)
+                    if (f.equipmentKey === req.equipmentKey) return true;
+
+                    // 3. Flex match for manual frequencies (no sourceRequestId)
+                    // If it's a manual entry and we still need frequencies of this type (mic/iem), 
+                    // let it fulfill the request.
+                    if (!f.sourceRequestId) return true;
+
+                    return false;
+                }).slice(0, req.count);
+                
+                matches.forEach(m => {
+                    matchedExistingIds.add(m.id!);
+                    newFreqs.push(m);
+                });
+                
+                const targetToFind = Math.max(0, req.count - matches.length);
+                
+                // Determine actual type to be used, but keep f.type as the bucket type for UI placement
+                const isWmasProfile = profile?.type === 'wmas';
+
+                // Safety: if we somehow already have enough, skip
+                if (targetToFind > 0) {
+                    const finalExclusions = getEquipmentAwareExclusions(actExclusions, isWmasProfile ? 'wmas' : bucket.type, triStates, region);
+                    let candidates = getCandidates(minFreq, maxFreq, profile?.tuningStep || 0.025, finalExclusions, inclusionRanges || null);
+                    if (calculationStrategy === 'bottom-up') {
+                        // Already sorted
+                    } else if (calculationStrategy === 'top-down') {
+                        candidates.reverse();
+                    } else if (calculationStrategy === 'high-density') {
+                        const pattern = Math.random();
+                        if (pattern > 0.75) {
+                            candidates.reverse(); // Bottom-up (reversed natural array)
+                        } else if (pattern > 0.5) {
+                            // Center-out packing
+                            const centerCand = [];
+                            let l = Math.floor(candidates.length / 2) - 1;
+                            let r = Math.floor(candidates.length / 2);
+                            while (l >= 0 || r < candidates.length) {
+                                if (r < candidates.length) centerCand.push(candidates[r++]);
+                                if (l >= 0) centerCand.push(candidates[l--]);
+                            }
+                            candidates = centerCand;
+                        } else if (pattern > 0.25) {
+                            // Edges-in packing
+                            const edgeCand = [];
+                            let l = 0; let r = candidates.length - 1;
+                            while(l <= r) {
+                                if (l === r) { edgeCand.push(candidates[l]); break; }
+                                edgeCand.push(candidates[l++]);
+                                edgeCand.push(candidates[r--]);
+                            }
+                            candidates = edgeCand;
+                        }
+                        // Default (<0.25) remains natural Top-Down array
+                    } else {
+                        candidates = shuffleArray(candidates);
+                    }
+                    let found = 0;
+                    let checksSinceYield = 0;
+
+                    for (const val of candidates) {
+                        if (abortSignal?.aborted) throw new Error('AbortError');
+                        if (found >= targetToFind) break;
+                        
+                        // YIELD TO MAIN THREAD every 20 candidate checks
+                        checksSinceYield++;
+                        if (checksSinceYield >= 20) {
+                            await new Promise(r => setTimeout(r, 0));
+                            checksSinceYield = 0;
+                        }
+
+                        const unaddedLocked = lockedFreqs.filter(lf => !matchedExistingIds.has(lf.id!));
+                        let validationPool = [...staticPool, ...otherActsPool, ...newFreqs, ...unaddedLocked];
+                        
+                        if (bucket.type === 'mic') {
+                            houseMicPool.forEach(hf => validationPool.push({ ...hf, _ignoreImdWithCandidate: hf.zoneIndex !== stageIdx }));
+                            const ignoreImd = act.houseIemsImdWithActMics !== true;
+                            houseIemPool.forEach(hf => validationPool.push({ ...hf, _ignoreImdWithCandidate: ignoreImd || hf.zoneIndex !== stageIdx }));
+                        } else {
+                            houseIemPool.forEach(hf => validationPool.push({ ...hf, _ignoreImdWithCandidate: hf.zoneIndex !== stageIdx }));
+                            const ignoreImd = act.houseMicsImdWithActIems !== true;
+                            houseMicPool.forEach(hf => validationPool.push({ ...hf, _ignoreImdWithCandidate: ignoreImd || hf.zoneIndex !== stageIdx }));
+                        }
+
+                        if (isExhaustiveCompatibleMutual(val, thresholds, stageIdx, validationPool, distances, db, globalOverrides, 10, req.linearMode, matrix, distanceWeightingEnabled).conflicts.length === 0) {
+                            const f: Frequency = { id: `A-${runNonce}-${act.actName.slice(0,3).toUpperCase()}-${newFreqs.length}`, label: `${act.actName} ${newFreqs.length + 1}`, value: val, type: bucket.type, sourceRequestId: req.id, manualThresholds: req.useManualParams ? thresholds : undefined, compatibilityLevel: req.compatibilityLevel, equipmentKey: req.equipmentKey, source: 'act' as const, zoneIndex: stageIdx, locked: false, linearMode: req.linearMode };
+                            newFreqs.push(f); found++;
+                            frequenciesProcessed++;
+                            
+                            // Update progress on placement
+                            onProgress?.({ 
+                                found: 0, 
+                                processed: frequenciesProcessed, 
+                                total: prioritySortedActs.length, 
+                                totalRequested, 
+                                status: `Allocating ${act.actName}...` 
+                            });
+                        } else { stats.totalRejections++; }
+                    }
+                    if (found < targetToFind) {
+                        stats.temporalSaturation++;
+                        // Still count shortfall as processed
+                        frequenciesProcessed += (targetToFind - found);
+                    }
+                } else {
+                    // Update progress even if already found
+                    frequenciesProcessed += req.count;
+                }
+            }
+        }
+        
+        // Add manual frequencies that were not generated by a specific request
+        lockedFreqs.forEach(f => {
+            if (!f.sourceRequestId && !matchedExistingIds.has(f.id!)) {
+                newFreqs.push(f);
+                matchedExistingIds.add(f.id!);
+            }
+        });
+        
+        resultsMap.set(act.id, { ...act, frequencies: newFreqs });
+        onProgress?.({ found: resultsMap.size, processed: frequenciesProcessed, total: acts.length, totalRequested, status: `Act ${i + 1}/${acts.length} Complete` });
+    }
+
+    const finalResults = acts.map(a => resultsMap.get(a.id)!);
+    let totalFound = 0;
+    let micsFound = 0;
+    let iemsFound = 0;
+
+    const countFound = (freqs?: Frequency[]) => {
+        if (!freqs) return;
+        freqs.forEach(f => {
+            if (f.value > 0) {
+                totalFound++;
+                if (f.type === 'mic') micsFound++;
+                else if (f.type === 'iem') iemsFound++;
+                else micsFound++; // Default generic to mics
+            }
+        });
+    };
+
+    constants.forEach(s => countFound(s.frequencies));
+    house.forEach(s => countFound(s.frequencies));
+    finalResults.forEach(a => countFound(a.frequencies));
+
+    const report: OptimizationReport = { bottlenecks: stats, requested: totalRequested, found: totalFound, shortfall: Math.max(0, totalRequested - totalFound), micsRequested, iemsRequested, micsFound, iemsFound, suggestions: [], peakCongestionActs: finalResults.filter(a => (a.frequencies?.length || 0) < 1).map(a => a.actName) };
+    return { results: finalResults, report };
+};
+
+export const validateFestivalCompatibility = (
+    acts: FestivalAct[], constants: ConstantSystemRequest[], house: ConstantSystemRequest[], zoneConfigs: ZoneConfig[], distances: number[][],
+    db: Record<string, EquipmentProfile>, matrix: boolean[][], overlapMinutes: number, globalOverrides?: Record<string, Partial<Thresholds>>,
+    wmasState?: WMASState, distanceWeightingEnabled: boolean = true
+): { conflicts: Conflict[] } => {
+    const allConflicts: Conflict[] = [];
+    
+    // Process constant and house frequencies to ensure they carry their correct zoneIndex for spatial validation
+    const constantFreqs = constants.flatMap(s => {
+        const sIdx = zoneConfigs.findIndex(z => z.name.toLowerCase().trim() === (s.stageName || '').toLowerCase().trim());
+        return (s.frequencies || []).map(f => ({ ...f, zoneIndex: sIdx }));
+    });
+    const houseFreqs = house.flatMap(s => {
+        const sIdx = zoneConfigs.findIndex(z => z.name.toLowerCase().trim() === (s.stageName || '').toLowerCase().trim());
+        return (s.frequencies || []).map(f => ({ ...f, zoneIndex: sIdx }));
+    });
+
+    const checkAgainstPool = (target: Frequency, pool: Frequency[]) => {
+        const th = target.manualThresholds || getFinalThresholds(target, db, globalOverrides);
+        const zIdx = target.zoneIndex ?? -1;
+        return isExhaustiveCompatibleMutual(target.value, th, zIdx, pool, distances, db, globalOverrides, 10, target.linearMode, matrix, distanceWeightingEnabled).conflicts;
+    };
+    acts.forEach(act => {
+        if (!act.frequencies) return;
+        const buffer = overlapMinutes * 60000;
+        
+        // Find consecutive acts on the same stage
+        const sameStageActs = acts.filter(a => (a.stage || '').toLowerCase().trim() === (act.stage || '').toLowerCase().trim());
+        const hasOrderNumbers = act.orderNumber !== undefined && sameStageActs.some(a => a.orderNumber !== undefined);
+
+        let consecutiveActIds = new Set<string>();
+        if (hasOrderNumbers) {
+            const actOrder = act.orderNumber!;
+            sameStageActs.forEach(a => {
+                if (a.orderNumber === actOrder - 1 || a.orderNumber === actOrder + 1) {
+                    consecutiveActIds.add(a.id);
+                }
+            });
+        } else {
+            // Current logic (fallback/chronological)
+            const sameStageActsChronological = sameStageActs
+                .sort((a, b) => ensureValidDate(a.startTime).getTime() - ensureValidDate(b.startTime).getTime());
+            const actIndexInSameStage = sameStageActsChronological.findIndex(a => a.id === act.id);
+            if (actIndexInSameStage > 0) consecutiveActIds.add(sameStageActsChronological[actIndexInSameStage - 1].id);
+            if (actIndexInSameStage < sameStageActsChronological.length - 1) consecutiveActIds.add(sameStageActsChronological[actIndexInSameStage + 1].id);
+        }
+        
+        // Respect stage-specific house system muting
+        const actStageClean = (act.stage || '').toLowerCase().trim();
+        const stageIdx = zoneConfigs.findIndex(z => z.name.toLowerCase().trim() === actStageClean);
+
+        const isMuteAll = act.muteHouseFrequencies || (act.muteHouseMics && act.muteHouseIems);
+        
+        // Calculate house system pools with site-wide context
+        // HOWEVER: We only care about House IMDs if they are on the SAME STAGE as the act.
+        // Frequencies on other stages only need fundamental check (which checkAgainstPool handles spatially).
+        const houseMicPool = houseFreqs.filter(f => f.type === 'mic' && (!act.muteHouseMics || f.zoneIndex !== stageIdx) && (!act.muteHouseFrequencies || f.zoneIndex !== stageIdx));
+        const houseIemPool = houseFreqs.filter(f => f.type === 'iem' && (!act.muteHouseIems || f.zoneIndex !== stageIdx) && (!act.muteHouseFrequencies || f.zoneIndex !== stageIdx));
+
+        const basePool = [ 
+            ...constantFreqs, 
+            ...acts.filter(other => { 
+                if (other.id === act.id) return false; 
+                const otherStart = ensureValidDate(other.startTime); 
+                const otherEnd = ensureValidDate(other.endTime); 
+                const actStart = ensureValidDate(act.startTime); 
+                const actEnd = ensureValidDate(act.endTime); 
+                
+                const isTimeOverlap = actStart.getTime() <= (otherEnd.getTime() + buffer) && otherStart.getTime() <= (actEnd.getTime() + buffer); 
+                const isConsecutive = consecutiveActIds.has(other.id);
+                return isTimeOverlap || isConsecutive;
+            }).flatMap(other => {
+                const actStart = ensureValidDate(act.startTime).getTime();
+                const actEnd = ensureValidDate(act.endTime).getTime();
+                const otherStart = ensureValidDate(other.startTime).getTime();
+                const otherEnd = ensureValidDate(other.endTime).getTime();
+                
+                const actualTimeOverlap = actStart < otherEnd && otherStart < actEnd;
+                const isConsecutiveOrSameStage = !actualTimeOverlap;
+
+                return (other.frequencies || []).map(f => ({
+                    ...f,
+                    _ignoreImdWithCandidate: isConsecutiveOrSameStage ? true : f._ignoreImdWithCandidate,
+                    _isConsecutive: consecutiveActIds.has(other.id)
+                }));
+            }) 
+        ];
+        
+        // Check against WMAS blocks
+        if (wmasState && wmasState.nodes) {
+            wmasState.nodes.forEach(node => {
+                if (node.assignedBlock) {
+                    let isExclusion = false;
+                    const isHouseNode = node.isHouseSystem !== false;
+
+                    if (isHouseNode) {
+                        // Respect stage-specific muting for WMAS house systems
+                        const isMatch = (node.stage || '').toLowerCase().trim() === (act.stage || '').toLowerCase().trim();
+                        if (!isMuteAll || !isMatch) {
+                            isExclusion = true;
+                        }
+                    } else if (node.startTime && node.endTime) {
+                        const wmasStart = new Date(node.startTime).getTime();
+                        const wmasEnd = new Date(node.endTime).getTime();
+                        const actStart = ensureValidDate(act.startTime).getTime();
+                        const actEnd = ensureValidDate(act.endTime).getTime();
+                        if (actStart <= (wmasEnd + buffer) && wmasStart <= (actEnd + buffer)) {
+                            isExclusion = true;
+                        }
+                    }
+
+                    if (isExclusion) {
+                        act.frequencies?.forEach(f => {
+                            if (f.value >= node.assignedBlock!.start && f.value <= node.assignedBlock!.end) {
+                                allConflicts.push({
+                                    frequencyId: f.id,
+                                    type: 'fundamental',
+                                    message: `Frequency ${f.value.toFixed(3)} MHz falls within WMAS block ${node.name} (${node.assignedBlock!.start.toFixed(3)}-${node.assignedBlock!.end.toFixed(3)} MHz)`,
+                                    conflictingFrequencyId: node.id,
+                                    severity: 'critical',
+                                    targetFreq: f,
+                                    sourceFreqs: [],
+                                    diff: 0,
+                                    sceneName: act.actName
+                                });
+                            }
+                        });
+                    }
+                }
+            });
+        }
+
+        act.frequencies.forEach((f, i) => { 
+            if (f.value <= 0) return; 
+            const currentActPool = act.frequencies!.filter((_, idx) => idx !== i); 
+
+            let dynamicPool = [...basePool, ...currentActPool];
+            if (f.type === 'mic') {
+                houseMicPool.forEach(hf => dynamicPool.push({ ...hf, _ignoreImdWithCandidate: hf.zoneIndex !== stageIdx }));
+                const ignoreImd = act.houseIemsImdWithActMics !== true;
+                houseIemPool.forEach(hf => dynamicPool.push({ ...hf, _ignoreImdWithCandidate: ignoreImd || hf.zoneIndex !== stageIdx }));
+            } else {
+                houseIemPool.forEach(hf => dynamicPool.push({ ...hf, _ignoreImdWithCandidate: hf.zoneIndex !== stageIdx }));
+                const ignoreImd = act.houseMicsImdWithActIems !== true;
+                houseMicPool.forEach(hf => dynamicPool.push({ ...hf, _ignoreImdWithCandidate: ignoreImd || hf.zoneIndex !== stageIdx }));
+            }
+
+            const issues = checkAgainstPool(f, dynamicPool); 
+            issues.forEach(issue => { allConflicts.push({ ...issue, targetFreq: f, sceneName: act.actName }); }); 
+        });
+    });
+    const statics = [...constantFreqs, ...houseFreqs];
+    statics.forEach((f, i) => { 
+        if (f.value <= 0) return; 
+        
+        // When checking a static frequency (House/Constant), we must respect the 
+        // per-act IMD checkboxes for any act-frequencies in the pool.
+        const siteWidePool = [
+            ...statics.filter((_, idx) => idx !== i), 
+            ...acts.flatMap(a => (a.frequencies || []).map(af => {
+                // Determine if this specific static frequency should ignore IMD with this act frequency
+                let ignore = false;
+                if (f.source === 'house') {
+                    const actStageIdx = zoneConfigs.findIndex(z => z.name.toLowerCase().trim() === (a.stage || '').toLowerCase().trim());
+                    if (f.zoneIndex !== actStageIdx) {
+                        ignore = true;
+                    } else {
+                        if (f.type === 'iem' && af.type === 'mic') ignore = a.houseIemsImdWithActMics !== true;
+                        if (f.type === 'mic' && af.type === 'iem') ignore = a.houseMicsImdWithActIems !== true;
+                    }
+                }
+                return { ...af, _ignoreImdWithCandidate: ignore };
+            }))
+        ]; 
+        
+        const issues = checkAgainstPool(f, siteWidePool); 
+        issues.forEach(issue => { allConflicts.push({ ...issue, targetFreq: f, sceneName: 'Static System' }); }); 
+    });
+    return { conflicts: allConflicts };
+};
+
+export const calculateTalkbackIntermods = (sources: { value: number, bw?: number }[]): TalkbackIntermods => {
+    const twoTone: IntermodProduct[] = []; const threeTone: IntermodProduct[] = [];
+    const carriers = sources.map(s => s.value);
+    const bws = sources.map(s => s.bw || 0.0125);
+    
+    // Safety check for performance: O(n^2) for 2-tone remains fine up to many hundreds.
+    // O(n^3) for 3-tone becomes expensive above ~100 carriers.
+    const isHighDensity = carriers.length > 100;
+    const isUltraHighDensity = carriers.length > 250;
+
+    for (let i = 0; i < carriers.length; i++) {
+        for (let j = 0; j < carriers.length; j++) {
+            if (i === j) continue;
+            const val = (2 * toHz(carriers[i]) - toHz(carriers[j])) / 1000000;
+            const bw = Math.max(bws[i], bws[j]);
+            twoTone.push({ value: val, sources: [carriers[i], carriers[j]], type: '2t', bw });
+        }
+    }
+    
+    // Skip 3-tone if ultra-high density to prevent freezing
+    if (isUltraHighDensity) {
+        console.warn(`[calculateTalkbackIntermods] Carrier count too high (${carriers.length}). Skipping 3-tone for performance.`);
+        return { twoTone, threeTone: [], fiveTone: [], sevenTone: [] };
+    }
+
+    const maxI = isHighDensity ? Math.min(carriers.length, 100) : carriers.length;
+
+    for (let i = 0; i < maxI; i++) {
+        for (let j = i + 1; j < carriers.length; j++) {
+            // Further optimization for high density: sample the combinations if really high
+            if (isHighDensity && j > 80 && Math.random() > 0.5) continue;
+            
+            for (let k = j + 1; k < carriers.length; k++) {
+                if (isHighDensity && k > 60 && Math.random() > 0.3) continue;
+
+                const f1 = toHz(carriers[i]);
+                const f2 = toHz(carriers[j]);
+                const f3 = toHz(carriers[k]);
+                const bw = Math.max(bws[i], bws[j], bws[k]);
+                
+                const p3s = [
+                    { val: (f1 + f2 - f3) / 1000000, src: [carriers[i], carriers[j], carriers[k]] },
+                    { val: (f1 + f3 - f2) / 1000000, src: [carriers[i], carriers[k], carriers[j]] },
+                    { val: (f2 + f3 - f1) / 1000000, src: [carriers[j], carriers[k], carriers[i]] }
+                ];
+
+                for (const p of p3s) {
+                    threeTone.push({ value: p.val, sources: p.src, type: '3t', bw });
+                }
+            }
+        }
+    }
+    const seen = new Set<string>();
+    const uniqueThreeTone = threeTone.filter(im => {
+        const key = im.value.toFixed(6);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+    return { twoTone, threeTone: uniqueThreeTone, fiveTone: [], sevenTone: [] };
+};
+
+export const generateZonalTalkbackPairs = async (
+    configs: { 
+        name: string, pairCount: number, customPairCount?: number, txBands: number[], rxBands: number[], 
+        simplexTxBands?: number[], simplexWalkieBands?: number[], 
+        simplexTxCount?: number, simplexWalkieCount?: number, 
+        customSimplexTxCount?: number, customSimplexWalkieCount?: number,
+        simplexTxBw?: number, simplexWalkieBw?: number,
+        generationPriority?: ('duplex' | 'simplexTx' | 'simplexWalkie')[],
+        duplexCustomMode?: 'standard' | 'custom',
+        simplexCustomMode?: 'standard' | 'custom',
+        customTxMin?: number, customTxMax?: number, customRxMin?: number, customRxMax?: number,
+        customRanges?: { id: string, txMin: number, txMax: number, rxMin: number, rxMax: number, customPairCount?: number, customBw?: number }[], 
+        customTargetMode?: 'global' | 'specific',
+        targetSeparation?: number, exactSeparation?: boolean, useTargetSeparation?: boolean,
+        simplexTxMin?: number, simplexTxMax?: number, simplexWalkieMin?: number, simplexWalkieMax?: number,
+        customBw?: number 
+    }[],
+    spacing: number, distances: number[][], matrix: boolean[][],
+    previousResults: any, manualPairs: any[], onProgress: (p: number) => void, mode: TalkbackMode = 'standard',
+    country: string = 'UK', customBaseRange: { min: number, max: number } = { min: 450, max: 464 },
+    abortSignal?: AbortSignal
+): Promise<ZonalResult[]> => {
+    const coordStartTime = Date.now();
+    const results: ZonalResult[] = [];
+    const globalFreqPool: (Frequency & { isTx?: boolean, zoneIndex?: number })[] = [];
+
+    // Helper to determine if a frequency is a base transmitter
+    const isBaseTx = (f: number, isBaseExplicit?: boolean) => {
+        if (isBaseExplicit !== undefined) return isBaseExplicit;
+        if (mode === 'custom') {
+            return f >= customBaseRange.min && f <= customBaseRange.max;
+        }
+        if (mode === 'europe') return f > 464;
+        return f < 464;
+    };
+
+    // Helper to verify a frequency is not in a forbidden regulatory range
+    const forbiddenRanges = TALKBACK_FORBIDDEN_RANGES_BY_COUNTRY[country] || [];
+    const isForbidden = (f: number) => forbiddenRanges.some(range => {
+        // Disable 450-453 MHz AND 465-467 MHz forbidden zones in Mainland Europe mode
+        if (mode === 'europe') {
+            const is450Range = range.min >= 450 && range.max <= 453;
+            const is465Range = range.min >= 465 && range.max <= 467;
+            if (is450Range || is465Range) return false;
+        }
+        return f >= (range.min - 0.00001) && f <= (range.max + 0.00001);
+    });
+
+    // Spacing constants from TalkbackTab.tsx
+    const SPACING_FF = 0.025;
+    const SPACING_IMD = 0.0125;
+    const SPACING_FF_HZ = toHz(SPACING_FF);
+    const SPACING_IMD_HZ = toHz(SPACING_IMD);
+
+    const checkInteracts = (z1: number, z2: number) => {
+        if (z1 < 0 || z2 < 0) return true;
+        const d = distances[z1]?.[z2];
+        const m = matrix?.[z1]?.[z2];
+        if (d === undefined) return true;
+        return d < 25 || m === true;
+    };
+    
+    // Extract existing locked frequencies with source context
+    if (previousResults && Array.isArray(previousResults)) {
+        previousResults.forEach((res: ZonalResult, zIdx: number) => {
+            res.pairs.forEach(p => {
+                if (p.locked && p.active !== false) {
+                    if (p.tx > 0) globalFreqPool.push({ ...p, value: p.tx, id: p.id + '-tx', type: 'comms', zoneIndex: zIdx, isTx: p.rx === 0 ? true : isBaseTx(p.tx, p.txIsBase) });
+                    if (p.rx > 0) globalFreqPool.push({ ...p, value: p.rx, id: p.id + '-rx', type: 'comms', zoneIndex: zIdx, isTx: p.tx === 0 ? false : (p.rxIsBase !== undefined ? p.rxIsBase : (mode === 'custom' ? isBaseTx(p.rx, p.rxIsBase) : false)) });
+                }
+            });
+        });
+    }
+
+    // Extract active manual pairs
+    if (manualPairs && Array.isArray(manualPairs)) {
+        manualPairs.forEach(p => {
+            if (p.active !== false) {
+                const zIdx = p.zoneIndex ?? -1;
+                if (p.tx > 0) globalFreqPool.push({ ...p, value: p.tx, id: p.id + '-tx', type: 'comms', zoneIndex: zIdx, isTx: p.rx === 0 ? true : isBaseTx(p.tx, p.txIsBase) });
+                if (p.rx > 0) globalFreqPool.push({ ...p, value: p.rx, id: p.id + '-rx', type: 'comms', zoneIndex: zIdx, isTx: p.tx === 0 ? false : (p.rxIsBase !== undefined ? p.rxIsBase : (mode === 'custom' ? isBaseTx(p.rx, p.rxIsBase) : false)) });
+            }
+        });
+    }
+
+    for (let i = 0; i < configs.length; i++) {
+        const cfg = configs[i]; 
+        const zonePairs: DuplexPair[] = []; 
+        let candidatePool: { tx: number, rx: number }[] = [];
+        
+        const txFreqPool: number[] = [];
+        const rxFreqPool: number[] = [];
+        const customTxFreqPool: number[] = [];
+        const customRxFreqPool: number[] = [];
+        const simplexTxPool: number[] = [];
+        const simplexWalkiePool: number[] = [];
+        const customSimplexTxPool: number[] = [];
+        const customSimplexWalkiePool: number[] = [];
+
+        // DUPLEX POOL GENERATION - STANDARD
+        cfg.txBands.forEach(txB => { 
+            const partner = TALKBACK_FIXED_PAIRS[txB]; 
+            if (partner && cfg.rxBands.includes(partner)) { 
+                // Skip adding to txFreqPool, we will use discrete pairs
+            } else {
+                const def = TALKBACK_DEFINITIONS[txB]; 
+                if (def) {
+                    for (let f = def.min; f <= def.max + 0.000001; f += 0.0125) {
+                        const freqVal = parseFloat(f.toFixed(5));
+                        if (!isForbidden(freqVal)) txFreqPool.push(freqVal);
+                    }
+                }
+            }
+        });
+        
+        cfg.rxBands.forEach(rxB => { 
+            const isPartner = Array.from(cfg.txBands).some(txB => TALKBACK_FIXED_PAIRS[txB] === rxB);
+            if (isPartner) {
+                // Skip adding to rxFreqPool
+            } else {
+                const def = TALKBACK_DEFINITIONS[rxB]; 
+                if (def) {
+                    for (let f = def.min; f <= def.max + 0.000001; f += 0.0125) {
+                        const freqVal = parseFloat(f.toFixed(5));
+                        if (!isForbidden(freqVal)) rxFreqPool.push(freqVal);
+                    }
+                }
+            }
+        });
+        
+        cfg.txBands.forEach(txB => { 
+            const partner = TALKBACK_FIXED_PAIRS[txB]; 
+            if (partner && cfg.rxBands.includes(partner)) { 
+                const discrete = DISCRETE_TALKBACK_PAIRS[txB]; 
+                if (discrete) {
+                    discrete.forEach(pair => {
+                        if (!isForbidden(pair.tx) && !isForbidden(pair.rx)) {
+                            candidatePool.push(pair);
+                        }
+                    });
+                }
+            } 
+        });
+
+        // DUPLEX POOL GENERATION - CUSTOM
+        const bw = cfg.customBw || 0.0125;
+        const startOffset = 0;
+        
+        if (cfg.customTxMin !== undefined && cfg.customTxMax !== undefined) {
+            for (let f = cfg.customTxMin + startOffset; f <= cfg.customTxMax; f += bw) {
+                const freqVal = parseFloat(f.toFixed(5));
+                if (!isForbidden(freqVal)) customTxFreqPool.push(freqVal);
+            }
+        }
+        
+        if (cfg.customRxMin !== undefined && cfg.customRxMax !== undefined) {
+            for (let f = cfg.customRxMin + startOffset; f <= cfg.customRxMax; f += bw) {
+                const freqVal = parseFloat(f.toFixed(5));
+                if (!isForbidden(freqVal)) customRxFreqPool.push(freqVal);
+            }
+        }
+
+        if (cfg.customRanges && cfg.customRanges.length > 0) {
+            cfg.customRanges.forEach(range => {
+                const rangeBw = range.customBw || cfg.customBw || 0.0125;
+                const rangeStartOffset = 0;
+                if (cfg.customTargetMode !== 'specific' || !range.customPairCount) {
+                    if (range.txMin !== undefined && range.txMax !== undefined) {
+                        for (let f = range.txMin + rangeStartOffset; f <= range.txMax; f += rangeBw) {
+                            const freqVal = parseFloat(f.toFixed(5));
+                            if (!isForbidden(freqVal)) customTxFreqPool.push(freqVal);
+                        }
+                    }
+                    if (range.rxMin !== undefined && range.rxMax !== undefined) {
+                        for (let f = range.rxMin + rangeStartOffset; f <= range.rxMax; f += rangeBw) {
+                            const freqVal = parseFloat(f.toFixed(5));
+                            if (!isForbidden(freqVal)) customRxFreqPool.push(freqVal);
+                        }
+                    }
+                }
+            });
+        }
+
+        // SIMPLEX POOL GENERATION - COMBINED
+        const txBw = cfg.simplexTxBw || 0.0125;
+        const walkieBw = cfg.simplexWalkieBw || 0.0125;
+        
+        if (cfg.simplexTxMin !== undefined && cfg.simplexTxMax !== undefined) {
+            for (let f = cfg.simplexTxMin; f <= cfg.simplexTxMax + 0.000001; f += txBw) {
+                const freqVal = parseFloat(f.toFixed(5));
+                if (!isForbidden(freqVal)) customSimplexTxPool.push(freqVal);
+            }
+        }
+        
+        if (cfg.simplexWalkieMin !== undefined && cfg.simplexWalkieMax !== undefined) {
+            for (let f = cfg.simplexWalkieMin; f <= cfg.simplexWalkieMax + 0.000001; f += walkieBw) {
+                const freqVal = parseFloat(f.toFixed(5));
+                if (!isForbidden(freqVal)) customSimplexWalkiePool.push(freqVal);
+            }
+        }
+
+        (cfg.simplexTxBands || []).forEach(b => {
+            const def = TALKBACK_DEFINITIONS[b];
+            if (def) {
+                for (let f = def.min; f <= def.max + 0.000001; f += (cfg.simplexTxBw || 0.0125)) {
+                    const freqVal = parseFloat(f.toFixed(5));
+                    if (!isForbidden(freqVal)) simplexTxPool.push(freqVal);
+                }
+            }
+        });
+
+        (cfg.simplexWalkieBands || []).forEach(b => {
+            const def = TALKBACK_DEFINITIONS[b];
+            if (def) {
+                for (let f = def.min; f <= def.max + 0.000001; f += (cfg.simplexWalkieBw || 0.0125)) {
+                    const freqVal = parseFloat(f.toFixed(5));
+                    if (!isForbidden(freqVal)) simplexWalkiePool.push(freqVal);
+                }
+            }
+        });
+        
+        // Compatibility Logic (Directly from TalkbackTab.tsx, but highly optimized)
+        const checkPairCompZonal = (cand: {tx: number, rx: number}, currentPlan: DuplexPair[], zoneIdx: number) => {
+            if (cand.tx > 0 && isForbidden(cand.tx)) return false;
+            if (cand.rx > 0 && isForbidden(cand.rx)) return false;
+
+            const candTxHz = toHz(cand.tx);
+            const candRxHz = toHz(cand.rx);
+
+            // Transmitters: global pool TXs + current plan TXs
+            // We treat all TX frequencies as potential IMD sources, matching TalkbackTab.tsx behavior
+            const txPool = [
+                ...globalFreqPool.filter(f => f.isTx || f.id.endsWith('-tx')).map(f => ({ hz: toHz(f.value), zIdx: f.zoneIndex ?? 0, id: f.id })),
+                ...currentPlan.filter(p => !p.locked && p.tx > 0).map(p => ({ hz: toHz(p.tx), zIdx: zoneIdx, id: p.id + '-tx' }))
+            ];
+            if (cand.tx > 0) txPool.push({ hz: candTxHz, zIdx: zoneIdx, id: 'cand-tx' });
+
+            // Victims: global pool all + current plan all
+            const victimPool = [
+                ...globalFreqPool.map(f => ({ hz: toHz(f.value), zIdx: f.zoneIndex ?? 0, id: f.id })),
+                ...currentPlan.filter(p => !p.locked).flatMap(p => [
+                    p.tx > 0 ? { hz: toHz(p.tx), zIdx: zoneIdx, id: p.id + '-tx' } : null,
+                    p.rx > 0 ? { hz: toHz(p.rx), zIdx: zoneIdx, id: p.id + '-rx' } : null
+                ]).filter((v): v is { hz: number, zIdx: number, id: string } => v !== null)
+            ];
+            if (cand.tx > 0) victimPool.push({ hz: candTxHz, zIdx: zoneIdx, id: 'cand-tx' });
+            if (cand.rx > 0) victimPool.push({ hz: candRxHz, zIdx: zoneIdx, id: 'cand-rx' });
+
+            // Fundamental Clashes
+            for (let idx = 0; idx < victimPool.length; idx++) {
+                const v = victimPool[idx];
+                // Global fundamental check to ensure unique frequencies across all zones
+                if (cand.tx > 0 && v.id !== 'cand-tx' && Math.abs(candTxHz - v.hz) < SPACING_FF_HZ) return false;
+                if (cand.rx > 0 && v.id !== 'cand-rx' && Math.abs(candRxHz - v.hz) < SPACING_FF_HZ) return false;
+            }
+            if (cand.tx > 0 && cand.rx > 0 && Math.abs(candTxHz - candRxHz) < SPACING_FF_HZ) return false;
+
+            // Highly Optimized IMD-3 Checks
+            // Pre-filter transmitters and victims that actually interact with the zoneIdx.
+            const interactingTx: { hz: number, zIdx: number, id: string }[] = [];
+            for (let idx = 0; idx < txPool.length; idx++) {
+                const f = txPool[idx];
+                if (checkInteracts(f.zIdx, zoneIdx)) {
+                    interactingTx.push(f);
+                }
+            }
+
+            const interactingVictims: { hz: number, zIdx: number, id: string }[] = [];
+            for (let idx = 0; idx < victimPool.length; idx++) {
+                const v = victimPool[idx];
+                if (checkInteracts(v.zIdx, zoneIdx)) {
+                    interactingVictims.push(v);
+                }
+            }
+
+            // Case 1: Candidate as Victim
+            // Check if any combination of interacting transmitters hits candTxHz or candRxHz.
+            if (cand.tx > 0 || cand.rx > 0) {
+                // 2-transmitter IMD on candidate victim
+                for (let a = 0; a < interactingTx.length; a++) {
+                    const f1 = interactingTx[a];
+                    for (let b = 0; b < interactingTx.length; b++) {
+                        if (a === b) continue;
+                        const f2 = interactingTx[b];
+                        const p2 = 2 * f1.hz - f2.hz;
+                        
+                        if (cand.tx > 0 && Math.abs(candTxHz - p2) < SPACING_IMD_HZ) return false;
+                        if (cand.rx > 0 && Math.abs(candRxHz - p2) < SPACING_IMD_HZ) return false;
+                    }
+                }
+
+                // 3-transmitter IMD on candidate victim
+                for (let a = 0; a < interactingTx.length; a++) {
+                    const f1 = interactingTx[a];
+                    for (let b = a + 1; b < interactingTx.length; b++) {
+                        const f2 = interactingTx[b];
+                        for (let c = b + 1; c < interactingTx.length; c++) {
+                            const f3 = interactingTx[c];
+                            
+                            const p3a = f1.hz + f2.hz - f3.hz;
+                            const p3b = f1.hz + f3.hz - f2.hz;
+                            const p3c = f2.hz + f3.hz - f1.hz;
+                            
+                            if (cand.tx > 0) {
+                                if (Math.abs(candTxHz - p3a) < SPACING_IMD_HZ) return false;
+                                if (Math.abs(candTxHz - p3b) < SPACING_IMD_HZ) return false;
+                                if (Math.abs(candTxHz - p3c) < SPACING_IMD_HZ) return false;
+                            }
+                            if (cand.rx > 0) {
+                                if (Math.abs(candRxHz - p3a) < SPACING_IMD_HZ) return false;
+                                if (Math.abs(candRxHz - p3b) < SPACING_IMD_HZ) return false;
+                                if (Math.abs(candRxHz - p3c) < SPACING_IMD_HZ) return false;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Case 2: Candidate as Transmitter
+            // Check if cand-tx, combined with other transmitters, hits any of the interacting victims.
+            if (cand.tx > 0) {
+                for (let idx = 0; idx < interactingVictims.length; idx++) {
+                    const v = interactingVictims[idx];
+                    
+                    // Filter transmitters that interact with the victim's zone
+                    const txsForV: { hz: number, zIdx: number, id: string }[] = [];
+                    for (let txIdx = 0; txIdx < txPool.length; txIdx++) {
+                        const f = txPool[txIdx];
+                        if (checkInteracts(f.zIdx, v.zIdx)) {
+                            txsForV.push(f);
+                        }
+                    }
+
+                    // 2-transmitter IMD involving cand-tx hitting v
+                    for (let a = 0; a < txsForV.length; a++) {
+                        const f = txsForV[a];
+                        if (f.id === 'cand-tx') continue;
+                        
+                        const p2a = 2 * candTxHz - f.hz;
+                        const p2b = 2 * f.hz - candTxHz;
+                        
+                        if (Math.abs(v.hz - p2a) < SPACING_IMD_HZ) return false;
+                        if (Math.abs(v.hz - p2b) < SPACING_IMD_HZ) return false;
+                    }
+
+                    // 3-transmitter IMD involving cand-tx hitting v
+                    const otherTxs = [];
+                    for (let txIdx = 0; txIdx < txsForV.length; txIdx++) {
+                        const f = txsForV[txIdx];
+                        if (f.id !== 'cand-tx') {
+                            otherTxs.push(f);
+                        }
+                    }
+                    for (let a = 0; a < otherTxs.length; a++) {
+                        const f1 = otherTxs[a];
+                        for (let b = a + 1; b < otherTxs.length; b++) {
+                            const f2 = otherTxs[b];
+                            
+                            const p3a = candTxHz + f1.hz - f2.hz;
+                            const p3b = candTxHz + f2.hz - f1.hz;
+                            const p3c = f1.hz + f2.hz - candTxHz;
+                            
+                            if (Math.abs(v.hz - p3a) < SPACING_IMD_HZ) return false;
+                            if (Math.abs(v.hz - p3b) < SPACING_IMD_HZ) return false;
+                            if (Math.abs(v.hz - p3c) < SPACING_IMD_HZ) return false;
+                        }
+                    }
+                }
+            }
+
+            return true;
+        };
+
+        const buildDuplexPairsWithSeparation = (tF: number[], rF: number[], targetSep: number, exact: boolean) => {
+            const pairs: {tx: number, rx: number}[] = [];
+            const tolerance = exact ? 0.0001 : 0.1001;
+            for (const tx of tF) {
+                for (const rx of rF) {
+                    if (Math.abs(Math.abs(tx - rx) - targetSep) <= tolerance) {
+                        pairs.push({ tx, rx });
+                    }
+                }
+            }
+            return pairs;
+        };
+
+        let customCandidatePoolStatic: {tx: number, rx: number}[] = [];
+        if (cfg.useTargetSeparation && cfg.targetSeparation !== undefined) {
+            customCandidatePoolStatic = buildDuplexPairsWithSeparation(customTxFreqPool, customRxFreqPool, cfg.targetSeparation, !!cfg.exactSeparation);
+        }
+
+        let standardCandidatePoolStatic: {tx: number, rx: number}[] = [];
+        if (cfg.useTargetSeparation && cfg.targetSeparation !== undefined) {
+            standardCandidatePoolStatic = buildDuplexPairsWithSeparation(txFreqPool, rxFreqPool, cfg.targetSeparation, !!cfg.exactSeparation);
+        }
+
+        // Multi-iteration Search for this zone (highly optimized iteration limits and safeguards)
+        let bestZonePairs: DuplexPair[] = [];
+        const iterations = 1000; 
+        const zoneStartTime = Date.now();
+        let lastYieldTime = Date.now();
+        
+        const lockedInThisZone = previousResults && Array.isArray(previousResults) ? previousResults[i]?.pairs.filter((p: any) => p.locked && p.active !== false) || [] : [];
+        
+        for (let iter = 0; iter < iterations; iter++) {
+            if (abortSignal?.aborted) {
+                throw new Error('AbortError');
+            }
+            if (Date.now() - zoneStartTime > 5000) {
+                break; // Max 5s per zone safeguard
+            }
+            const current: DuplexPair[] = [...lockedInThisZone];
+            const sTx = shuffleArray(txFreqPool); 
+            const sRx = shuffleArray(rxFreqPool);
+            const localCandidatePool = [];
+            if (cfg.useTargetSeparation && cfg.targetSeparation !== undefined) {
+                const tol = cfg.exactSeparation ? 0.0001 : 0.1001;
+                const filteredDiscrete = candidatePool.filter(p => Math.abs(Math.abs(p.tx - p.rx) - cfg.targetSeparation!) <= tol);
+                localCandidatePool.push(...filteredDiscrete);
+                localCandidatePool.push(...standardCandidatePoolStatic);
+            } else {
+                localCandidatePool.push(...candidatePool);
+                if (sTx.length > 0 && sRx.length > 0) {
+                    for (let j = 0; j < Math.min(sTx.length, 3000); j++) localCandidatePool.push({ tx: sTx[j], rx: sRx[j % sRx.length] });
+                }
+            }
+            const shuffledDuplex = shuffleArray(localCandidatePool);
+
+            const cTx = shuffleArray(customTxFreqPool);
+            const cRx = shuffleArray(customRxFreqPool);
+            const customCandidatePool: {tx: number, rx: number}[] = [];
+            if (cfg.useTargetSeparation) {
+                customCandidatePool.push(...customCandidatePoolStatic);
+            } else if (cTx.length > 0 && cRx.length > 0) {
+                for (let j = 0; j < Math.min(cTx.length, 3000); j++) customCandidatePool.push({ tx: cTx[j], rx: cRx[j % cRx.length] });
+            }
+            const shuffledCustomDuplex = shuffleArray(customCandidatePool);
+
+            const shuffledSTx = shuffleArray(simplexTxPool);
+            const shuffledSWalkie = shuffleArray(simplexWalkiePool);
+            const shuffledCustomSTx = shuffleArray(customSimplexTxPool);
+            const shuffledCustomSWalkie = shuffleArray(customSimplexWalkiePool);
+
+            const priority = cfg.generationPriority || ['duplex', 'simplexTx', 'simplexWalkie'];
+            for (const type of priority) {
+                if (type === 'duplex') {
+                    // Standard Duplex
+                    for (const cand of shuffledDuplex) {
+                        if (current.filter(p => p.tx > 0 && p.rx > 0 && !p.groupName.includes('(Custom)')).length >= cfg.pairCount) break;
+                        if (checkPairCompZonal(cand, current, i)) {
+                            current.push({
+                                id: `ZP-${i}-${current.length}-${Math.random().toString(36).substring(2, 5)}`,
+                                label: `${cfg.name.slice(0,2).toUpperCase()} P${current.filter(p => p.tx > 0 && p.rx > 0 && !p.groupName.includes('(Custom)')).length + 1}`,
+                                tx: cand.tx, rx: cand.rx, txBw: 0.0125, rxBw: 0.0125, groupName: cfg.name, locked: false, active: true
+                            });
+                        }
+                    }
+
+                    // Specific Custom Ranges Duplex
+                    if (cfg.customTargetMode === 'specific' && cfg.customRanges && cfg.customRanges.length > 0) {
+                        for (let crIdx = 0; crIdx < cfg.customRanges.length; crIdx++) {
+                            const range = cfg.customRanges[crIdx];
+                            if (range.customPairCount && range.customPairCount > 0) {
+                                const rangeBw = range.customBw || 0.0125;
+                                const rcTx = [];
+                                const rcRx = [];
+                                if (range.txMin !== undefined && range.txMax !== undefined) {
+                                    for (let f = range.txMin; f <= range.txMax; f += rangeBw) {
+                                        const freqVal = parseFloat(f.toFixed(5));
+                                        if (!isForbidden(freqVal)) rcTx.push(freqVal);
+                                    }
+                                }
+                                if (range.rxMin !== undefined && range.rxMax !== undefined) {
+                                    for (let f = range.rxMin; f <= range.rxMax; f += rangeBw) {
+                                        const freqVal = parseFloat(f.toFixed(5));
+                                        if (!isForbidden(freqVal)) rcRx.push(freqVal);
+                                    }
+                                }
+                                
+                                let rcCand = [];
+                                if (rcTx.length > 0 && rcRx.length > 0) {
+                                    if (cfg.useTargetSeparation && cfg.targetSeparation !== undefined) {
+                                        rcCand = buildDuplexPairsWithSeparation(rcTx, rcRx, cfg.targetSeparation, !!cfg.exactSeparation);
+                                    } else {
+                                        const shuffTx = [...rcTx].sort(() => Math.random() - 0.5);
+                                        const shuffRx = [...rcRx].sort(() => Math.random() - 0.5);
+                                        for (let j = 0; j < Math.min(shuffTx.length, 3000); j++) {
+                                            rcCand.push({ tx: shuffTx[j], rx: shuffRx[j % shuffRx.length] });
+                                        }
+                                    }
+                                }
+                                const shuffledRc = rcCand.sort(() => Math.random() - 0.5);
+                                
+                                const targetSpec = range.customPairCount;
+                                const groupNameStr = `${cfg.name} (Custom ${crIdx + 1})`;
+                                for (const cand of shuffledRc) {
+                                    if (current.filter(p => p.tx > 0 && p.rx > 0 && p.groupName === groupNameStr).length >= targetSpec) break;
+                                    if (checkPairCompZonal(cand, current, i)) {
+                                        current.push({
+                                            id: `ZP-${i}-${current.length}-${Math.random().toString(36).substring(2, 5)}`,
+                                            label: `${cfg.name.slice(0,2).toUpperCase()} CP-${crIdx + 1}-${current.filter(p => p.tx > 0 && p.rx > 0 && p.groupName === groupNameStr).length + 1}`,
+                                            tx: cand.tx, rx: cand.rx, txBw: rangeBw, rxBw: rangeBw, groupName: groupNameStr, locked: false, active: true
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Custom Duplex
+                    const targetCustom = cfg.customPairCount || 0;
+                    for (const cand of shuffledCustomDuplex) {
+                        if (current.filter(p => p.tx > 0 && p.rx > 0 && p.groupName.includes('(Custom)')).length >= targetCustom) break;
+                        if (checkPairCompZonal(cand, current, i)) {
+                            current.push({
+                                id: `ZP-${i}-${current.length}-${Math.random().toString(36).substring(2, 5)}`,
+                                label: `${cfg.name.slice(0,2).toUpperCase()} CP${current.filter(p => p.tx > 0 && p.rx > 0 && p.groupName.includes('(Custom)')).length + 1}`,
+                                tx: cand.tx, rx: cand.rx, txBw: 0.0125, rxBw: 0.0125, groupName: `${cfg.name} (Custom)`, locked: false, active: true
+                            });
+                        }
+                    }
+                } else if (type === 'simplexTx') {
+                    // Standard Simplex Tx
+                    for (const f of shuffledSTx) {
+                        if (current.filter(p => p.tx > 0 && p.rx === 0 && !p.groupName.includes('(Custom)')).length >= (cfg.simplexTxCount || 0)) break;
+                        if (checkPairCompZonal({ tx: f, rx: 0 }, current, i)) {
+                            current.push({
+                                id: `ZP-STX-${i}-${current.length}-${Math.random().toString(36).substring(2, 5)}`,
+                                label: `${cfg.name.slice(0,2).toUpperCase()} STX${current.filter(p => p.tx > 0 && p.rx === 0 && !p.groupName.includes('(Custom)')).length + 1}`,
+                                tx: f, rx: 0, txBw: cfg.simplexTxBw || 0.0125, rxBw: 0, groupName: cfg.name, locked: false, active: true
+                            });
+                        }
+                    }
+                    // Custom Simplex Tx
+                    for (const f of shuffledCustomSTx) {
+                        if (current.filter(p => p.tx > 0 && p.rx === 0 && p.groupName.includes('(Custom)')).length >= (cfg.customSimplexTxCount || 0)) break;
+                        if (checkPairCompZonal({ tx: f, rx: 0 }, current, i)) {
+                            current.push({
+                                id: `ZP-CSTX-${i}-${current.length}-${Math.random().toString(36).substring(2, 5)}`,
+                                label: `${cfg.name.slice(0,2).toUpperCase()} CSTX${current.filter(p => p.tx > 0 && p.rx === 0 && p.groupName.includes('(Custom)')).length + 1}`,
+                                tx: f, rx: 0, txBw: cfg.simplexTxBw || 0.0125, rxBw: 0, groupName: `${cfg.name} (Custom)`, locked: false, active: true
+                            });
+                        }
+                    }
+                } else if (type === 'simplexWalkie') {
+                    // Standard Walkie
+                    for (const f of shuffledSWalkie) {
+                        if (current.filter(p => p.tx === 0 && p.rx > 0 && !p.groupName.includes('(Custom)')).length >= (cfg.simplexWalkieCount || 0)) break;
+                        if (checkPairCompZonal({ tx: 0, rx: f }, current, i)) {
+                            current.push({
+                                id: `ZP-SW-${i}-${current.length}-${Math.random().toString(36).substring(2, 5)}`,
+                                label: `${cfg.name.slice(0,2).toUpperCase()} SW${current.filter(p => p.tx === 0 && p.rx > 0 && !p.groupName.includes('(Custom)')).length + 1}`,
+                                tx: 0, rx: f, txBw: 0, rxBw: cfg.simplexWalkieBw || 0.0125, groupName: cfg.name, locked: false, active: true
+                            });
+                        }
+                    }
+                    // Custom Walkie
+                    for (const f of shuffledCustomSWalkie) {
+                        if (current.filter(p => p.tx === 0 && p.rx > 0 && p.groupName.includes('(Custom)')).length >= (cfg.customSimplexWalkieCount || 0)) break;
+                        if (checkPairCompZonal({ tx: 0, rx: f }, current, i)) {
+                            current.push({
+                                id: `ZP-CSW-${i}-${current.length}-${Math.random().toString(36).substring(2, 5)}`,
+                                label: `${cfg.name.slice(0,2).toUpperCase()} CSW${current.filter(p => p.tx === 0 && p.rx > 0 && p.groupName.includes('(Custom)')).length + 1}`,
+                                tx: 0, rx: f, txBw: 0, rxBw: cfg.simplexWalkieBw || 0.0125, groupName: `${cfg.name} (Custom)`, locked: false, active: true
+                            });
+                        }
+                    }
+                }
+            }
+
+            if (current.length > bestZonePairs.length) {
+                bestZonePairs = current;
+                const customRangesPairSum = cfg.customRanges?.reduce((sum, cr) => sum + (cr.customPairCount || 0), 0) || 0;
+                const totalTarget = cfg.pairCount + (cfg.customPairCount || 0) + customRangesPairSum + (cfg.simplexTxCount || 0) + (cfg.simplexWalkieCount || 0) + (cfg.customSimplexTxCount || 0) + (cfg.customSimplexWalkieCount || 0);
+                if (bestZonePairs.length >= totalTarget) break;
+            }
+
+            const now = Date.now();
+            if (now - lastYieldTime > 50) {
+                await new Promise(resolve => setTimeout(resolve, 0));
+                lastYieldTime = Date.now();
+                onProgress((i / configs.length) + (iter / iterations / configs.length));
+            }
+        }
+
+        // Add best solution to global pool
+        bestZonePairs.forEach(p => {
+            if (!p.locked) {
+                if (p.tx > 0) globalFreqPool.push({ ...p, value: p.tx, id: p.id + '-tx', zoneIndex: i, isTx: p.rx === 0 ? true : isBaseTx(p.tx, p.txIsBase), type: 'comms' });
+                if (p.rx > 0) globalFreqPool.push({ ...p, value: p.rx, id: p.id + '-rx', zoneIndex: i, isTx: p.tx === 0 ? false : (p.rxIsBase !== undefined ? p.rxIsBase : (mode === 'custom' ? isBaseTx(p.rx, p.rxIsBase) : false)), type: 'comms' });
+            }
+        });
+
+        const customRangesPairSum = cfg.customRanges?.reduce((sum, cr) => sum + (cr.customPairCount || 0), 0) || 0;
+        const totalTarget = cfg.pairCount + (cfg.customPairCount || 0) + customRangesPairSum + (cfg.simplexTxCount || 0) + (cfg.simplexWalkieCount || 0) + (cfg.customSimplexTxCount || 0) + (cfg.customSimplexWalkieCount || 0);
+        const failed = totalTarget - bestZonePairs.length;
+        
+        results.push({ zoneName: cfg.name, pairs: [...bestZonePairs], failedCount: Math.max(0, failed) });
+        onProgress((i + 1) / configs.length);
+    }
+    return results;
+};

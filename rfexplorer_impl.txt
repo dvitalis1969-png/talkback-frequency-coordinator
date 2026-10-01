@@ -1,0 +1,96 @@
+export async function readRFExplorerScan(device: SerialDevice, startFreq: number, endFreq: number, points: number = 112, onStatus?: (status: string) => void, onRaw?: (data: string) => void): Promise<ScanDataPoint[]> {
+    if (isBusy) return [];
+    isBusy = true;
+    
+    const { writer } = device;
+    
+    try {
+        if (onStatus) onStatus('Requesting sweep...');
+        // Request config and sweep (Standard RF Explorer command to request sweep: send 'C0')
+        const command = "C0\r\n";
+        const encoder = new TextEncoder();
+        await writer.write(encoder.encode(command));
+        
+        let scanData: ScanDataPoint[] = [];
+        let buffer = new Uint8Array(0);
+        let timeoutId: any;
+        
+        const timeoutPromise = new Promise((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error('RF Explorer Trace Timeout')), 10000);
+        });
+
+        const readPromise = (async () => {
+            try {
+                while (true) {
+                    const { value, done } = await safeRead(device);
+                    if (done) break;
+                    
+                    const merged = new Uint8Array(buffer.length + value.length);
+                    merged.set(buffer);
+                    merged.set(value, buffer.length);
+                    buffer = merged;
+                    
+                    if (onRaw) onRaw(`Read ${value.length} bytes`);
+                    
+                    // Search for $S marker (0x24, 0x53)
+                    for (let i = 0; i < buffer.length - 2; i++) {
+                        if (buffer[i] === 0x24 && buffer[i+1] === 0x53) {
+                            const steps = buffer[i+2];
+                            if (buffer.length >= i + 3 + steps) {
+                                // We have a full sweep
+                                const sweepData = buffer.slice(i + 3, i + 3 + steps);
+                                for (let j = 0; j < steps; j++) {
+                                    // RF Explorer usually returns -dBm directly or multiplied
+                                    // In standard protocol, the amplitude is: amp = (sweepData[j] / 2.0) * -1.0;
+                                    // Actually, standard RF Explorer sweep data is given as -1 * byte value / 2.
+                                    let amp = (sweepData[j] / 2.0) * -1.0;
+                                    // Let's cap and floor the amplitude to normal ranges
+                                    if (amp > 0) amp = -100;
+                                    scanData.push({ freq: 0, amp });
+                                }
+                                return; // Successfully read sweep
+                            }
+                        }
+                    }
+                    
+                    // If we accumulated too much, clear some of it to avoid memory leak
+                    if (buffer.length > 4096) {
+                        buffer = buffer.slice(buffer.length - 2048);
+                    }
+                }
+            } finally {
+                clearTimeout(timeoutId);
+            }
+        })();
+
+        try {
+            await Promise.race([readPromise, timeoutPromise]);
+        } catch (err) {
+            try { await device.reader?.cancel(); } catch (e) {}
+            try { await readPromise; } catch (e) {}
+            throw err;
+        }
+        
+        const numPoints = scanData.length;
+        if (numPoints > 0) {
+            const step = (endFreq - startFreq) / Math.max(1, numPoints - 1);
+            for (let i = 0; i < numPoints; i++) {
+                scanData[i].freq = startFreq + (i * step);
+            }
+        }
+        
+        if (onStatus) onStatus(`Trace complete: ${numPoints} points`);
+        return scanData;
+
+    } catch (error: any) {
+        let message = error.message;
+        if (message.includes('The port is closed')) {
+            message = 'RF Explorer device disconnected. Please reconnect the device.';
+        }
+        console.error('RF Explorer Read Error:', message);
+        if (onStatus) onStatus(`Trace Error: ${message}`);
+        return [];
+    } finally {
+        isBusy = false;
+    }
+}

@@ -1,0 +1,14 @@
+
+async function run() {
+  const url = 'https://www.rabbitears.info/api/xml.php?request=get_transmitters&lat=40.71&lon=-74.01';
+  console.log("Testing:", url);
+  try {
+    const resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    console.log("Status:", resp.status);
+    const text = await resp.text();
+    console.log("Response:", text.substring(0, 500).replace(/\n/g, ' '));
+  } catch (e) {
+    console.log("Error:", e.message);
+  }
+}
+run();

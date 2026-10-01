@@ -1,0 +1,12 @@
+{
+  "name": "RF Suite",
+  "description": "An advanced professional suite for RF (Radio Frequency) spectrum analysis, compatibility checking and frequency coordination. Tools include spectrum visualization, TV channel lookup, and collaborative coordination for festivals and high-density events.",
+  "requestFramePermissions": [
+    "geolocation",
+    "serial",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

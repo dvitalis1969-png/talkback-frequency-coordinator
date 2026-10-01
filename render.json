@@ -1,0 +1,6 @@
+{
+  "scripts": {
+    "start": "node dist/server/server.js",
+    "build": "npm run build"
+  }
+}

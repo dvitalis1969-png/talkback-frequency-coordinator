@@ -1,0 +1,251 @@
+                          sets.
+                        </div>
+                      )}
+                      <div className="space-y-2">
+                        {cfg.subzones?.map((sz, szIdx) => (
+                          <div
+                            key={sz.id}
+                            className="bg-slate-900 border border-slate-700 rounded-lg p-2 flex flex-col gap-2"
+                          >
+                            <div className="flex items-center justify-between">
+                              <input
+                                value={sz.name}
+                                onChange={(e) =>
+                                  setTalkbackZoneConfigs((prev) =>
+                                    prev.map((c, i) =>
+                                      i === zIdx
+                                        ? {
+                                            ...c,
+                                            subzones: c.subzones?.map((s, j) =>
+                                              j === szIdx
+                                                ? { ...s, name: e.target.value }
+                                                : s,
+                                            ),
+                                          }
+                                        : c,
+                                    ),
+                                  )
+                                }
+                                className="bg-transparent text-[10px] font-black text-white w-24 outline-none border-b border-dashed border-slate-600 focus:border-indigo-400"
+                              />
+                              <button
+                                onClick={() =>
+                                  setTalkbackZoneConfigs((prev) =>
+                                    prev.map((c, i) =>
+                                      i === zIdx
+                                        ? {
+                                            ...c,
+                                            subzones: c.subzones?.filter(
+                                              (_, j) => j !== szIdx,
+                                            ),
+                                          }
+                                        : c,
+                                    ),
+                                  )
+                                }
+                                className="text-slate-500 hover:text-red-400 transition-colors"
+                              >
+                                <svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  className="h-3 w-3"
+                                  viewBox="0 0 20 20"
+                                  fill="currentColor"
+                                >
+                                  <path
+                                    fillRule="evenodd"
+                                    d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
+                                    clipRule="evenodd"
+                                  />
+                                </svg>
+                              </button>
+                            </div>
+                            <div className="grid grid-cols-3 lg:grid-cols-6 gap-2 text-[9px]">
+                              <div className="flex flex-col gap-1 bg-slate-950 p-1.5 rounded border border-slate-800">
+                                <span className="text-slate-500 font-bold whitespace-nowrap">
+                                  Dup (Std)
+                                </span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={sz.pairCount || 0}
+                                  onChange={(e) =>
+                                    setTalkbackZoneConfigs((prev) =>
+                                      prev.map((c, i) =>
+                                        i === zIdx
+                                          ? {
+                                              ...c,
+                                              subzones: c.subzones?.map(
+                                                (s, j) =>
+                                                  j === szIdx
+                                                    ? {
+                                                        ...s,
+                                                        pairCount:
+                                                          parseInt(
+                                                            e.target.value,
+                                                          ) || 0,
+                                                      }
+                                                    : s,
+                                              ),
+                                            }
+                                          : c,
+                                      ),
+                                    )
+                                  }
+                                  className="w-full bg-transparent text-white text-center font-mono outline-none"
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1 bg-slate-950 p-1.5 rounded border border-slate-800">
+                                <span className="text-slate-500 font-bold whitespace-nowrap">
+                                  Dup (Cust)
+                                </span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={sz.customPairCount || 0}
+                                  onChange={(e) =>
+                                    setTalkbackZoneConfigs((prev) =>
+                                      prev.map((c, i) =>
+                                        i === zIdx
+                                          ? {
+                                              ...c,
+                                              subzones: c.subzones?.map(
+                                                (s, j) =>
+                                                  j === szIdx
+                                                    ? {
+                                                        ...s,
+                                                        customPairCount:
+                                                          parseInt(
+                                                            e.target.value,
+                                                          ) || 0,
+                                                      }
+                                                    : s,
+                                              ),
+                                            }
+                                          : c,
+                                      ),
+                                    )
+                                  }
+                                  className="w-full bg-transparent text-white text-center font-mono outline-none"
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1 bg-slate-950 p-1.5 rounded border border-slate-800">
+                                <span className="text-amber-500/70 font-bold whitespace-nowrap">
+                                  Base(Std)
+                                </span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={sz.simplexTxCount || 0}
+                                  onChange={(e) =>
+                                    setTalkbackZoneConfigs((prev) =>
+                                      prev.map((c, i) =>
+                                        i === zIdx
+                                          ? {
+                                              ...c,
+                                              subzones: c.subzones?.map(
+                                                (s, j) =>
+                                                  j === szIdx
+                                                    ? {
+                                                        ...s,
+                                                        simplexTxCount:
+                                                          parseInt(
+                                                            e.target.value,
+                                                          ) || 0,
+                                                      }
+                                                    : s,
+                                              ),
+                                            }
+                                          : c,
+                                      ),
+                                    )
+                                  }
+                                  className="w-full bg-transparent text-white text-center font-mono outline-none"
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1 bg-slate-950 p-1.5 rounded border border-slate-800">
+                                <span className="text-amber-500/70 font-bold whitespace-nowrap">
+                                  Base(Cst)
+                                </span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={sz.customSimplexTxCount || 0}
+                                  onChange={(e) =>
+                                    setTalkbackZoneConfigs((prev) =>
+                                      prev.map((c, i) =>
+                                        i === zIdx
+                                          ? {
+                                              ...c,
+                                              subzones: c.subzones?.map(
+                                                (s, j) =>
+                                                  j === szIdx
+                                                    ? {
+                                                        ...s,
+                                                        customSimplexTxCount:
+                                                          parseInt(
+                                                            e.target.value,
+                                                          ) || 0,
+                                                      }
+                                                    : s,
+                                              ),
+                                            }
+                                          : c,
+                                      ),
+                                    )
+                                  }
+                                  className="w-full bg-transparent text-white text-center font-mono outline-none"
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1 bg-slate-950 p-1.5 rounded border border-slate-800">
+                                <span className="text-purple-500/70 font-bold whitespace-nowrap">
+                                  Walk(Std)
+                                </span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={sz.simplexWalkieCount || 0}
+                                  onChange={(e) =>
+                                    setTalkbackZoneConfigs((prev) =>
+                                      prev.map((c, i) =>
+                                        i === zIdx
+                                          ? {
+                                              ...c,
+                                              subzones: c.subzones?.map(
+                                                (s, j) =>
+                                                  j === szIdx
+                                                    ? {
+                                                        ...s,
+                                                        simplexWalkieCount:
+                                                          parseInt(
+                                                            e.target.value,
+                                                          ) || 0,
+                                                      }
+                                                    : s,
+                                              ),
+                                            }
+                                          : c,
+                                      ),
+                                    )
+                                  }
+                                  className="w-full bg-transparent text-white text-center font-mono outline-none"
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1 bg-slate-950 p-1.5 rounded border border-slate-800">
+                                <span className="text-purple-500/70 font-bold whitespace-nowrap">
+                                  Walk(Cst)
+                                </span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={sz.customSimplexWalkieCount || 0}
+                                  onChange={(e) =>
+                                    setTalkbackZoneConfigs((prev) =>
+                                      prev.map((c, i) =>
+                                        i === zIdx
+                                          ? {
+                                              ...c,
+                                              subzones: c.subzones?.map(
+                                                (s, j) =>
+                                                  j === szIdx
+                                                    ? {
+                                                        ...s,

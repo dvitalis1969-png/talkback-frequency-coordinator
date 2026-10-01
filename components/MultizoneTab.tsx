@@ -1,0 +1,1848 @@
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { motion } from 'motion/react';
+import { toast } from 'sonner';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
+import { PDFDocument } from 'pdf-lib';
+import { generateBrandedPdf, getTableStyles, generateFullCoordinationPdf } from '../src/utils/pdfBranding';
+import Card, { CardTitle } from './Card';
+import TvGrid from './TvGrid';
+import PdfPreviewModal from './PdfPreviewModal';
+import { Thresholds, Zone, ZoneConfig, Frequency, EquipmentProfile, CompatibilityLevel, TxType, TVChannelState, WMASState } from '../types';
+import { generateMultizoneFrequencies, getFinalThresholds, getCoordinationDiagnostics, CoordinationDiagnostic } from '../services/rfService';
+import { UK_TV_CHANNELS, US_TV_CHANNELS, EQUIPMENT_DATABASE, COMPATIBILITY_PROFILES } from '../constants';
+import { InfoTooltip } from './InfoTooltip';
+import { EngagingLoadingState, CelebratorySuccessState } from './EngagingStates';
+
+const ManualFreqInput: React.FC<{
+    value: number;
+    onChange: (val: number) => void;
+    className: string;
+}> = ({ value, onChange, className }) => {
+    const [localString, setLocalString] = useState<string>(value === 0 ? '' : value.toString());
+    const isFocused = useRef(false);
+
+    useEffect(() => {
+        if (!isFocused.current) {
+            setLocalString(value === 0 ? '' : value.toString());
+        }
+    }, [value]);
+
+    const handleBlur = () => {
+        isFocused.current = false;
+        const parsed = parseFloat(localString);
+        if (!isNaN(parsed) && parsed > 0) {
+            onChange(parsed);
+            setLocalString(parsed.toString());
+        } else {
+            setLocalString(value === 0 ? '' : value.toString());
+        }
+    };
+
+    return (
+        <input 
+            type="number" 
+            step="0.001" 
+            value={localString} 
+            onChange={e => setLocalString(e.target.value)}
+            onFocus={() => isFocused.current = true}
+            onBlur={handleBlur}
+            placeholder="MHz"
+            className={className} 
+        />
+    );
+};
+
+type ChannelState = 'available' | 'mic-only' | 'iem-only' | 'blocked';
+
+interface MultiZoneCoordinationTabProps {
+    isLinked: boolean;
+    setIsLinked: (isLinked: boolean) => void;
+    numZones: number;
+    setNumZones: (num: number) => void;
+    zoneConfigs: ZoneConfig[]; // Physical Booths
+    setZoneConfigs: (configs: ZoneConfig[]) => void;
+    equipmentGroups: ZoneConfig[]; // Deployed Gear List
+    setEquipmentGroups: (groups: ZoneConfig[]) => void;
+    manualFrequencies?: Frequency[];
+    setManualFrequencies?: (freqs: Frequency[]) => void;
+    manualConstraints?: Frequency[];
+    setManualConstraints?: (freqs: Frequency[]) => void;
+    distances: number[][];
+    setDistances: (distances: number[][]) => void;
+    results: { zones: Zone[], spares: { mics: Frequency[], iems: Frequency[] } } | null;
+    setResults: (results: { zones: Zone[], spares: { mics: Frequency[], iems: Frequency[] } } | null) => void;
+    customEquipment: EquipmentProfile[];
+    onManageCustomEquipment: () => void;
+    compatibilityMatrix: boolean[][];
+    setCompatibilityMatrix: React.Dispatch<React.SetStateAction<boolean[][]>>;
+    equipmentOverrides?: Record<string, Partial<Thresholds>>;
+    tvChannelStates?: Record<number, TVChannelState>;
+    setTvChannelStates?: React.Dispatch<React.SetStateAction<Record<number, TVChannelState>>>;
+    wmasState?: WMASState;
+    tvRegion?: 'uk' | 'us';
+    user?: any;
+    distanceWeightingEnabled: boolean;
+    setDistanceWeightingEnabled: (enabled: boolean) => void;
+}
+
+const buttonBase = "px-3 py-2 rounded-sm font-semibold uppercase tracking-wide transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-900 transform active:translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed text-xs";
+const primaryButton = `bg-gradient-to-r from-indigo-500 to-purple-500 text-white border-b-4 border-indigo-800 hover:border-indigo-700 hover:brightness-110 ${buttonBase}`;
+const secondaryButton = `bg-slate-700 text-slate-200 border-b-4 border-slate-900 hover:border-slate-800 hover:bg-slate-600 ${buttonBase}`;
+const actionButton = `bg-cyan-600/80 text-white border-b-4 border-cyan-800 hover:border-cyan-700 hover:bg-cyan-600 ${buttonBase}`;
+const greenButton = `bg-emerald-600/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-600 hover:text-white ${buttonBase}`;
+
+const MultiZoneCoordinationTab: React.FC<MultiZoneCoordinationTabProps> = ({ 
+    numZones,
+    setNumZones,
+    zoneConfigs,
+    setZoneConfigs,
+    equipmentGroups,
+    setEquipmentGroups,
+    manualFrequencies = [],
+    setManualFrequencies,
+    manualConstraints = [],
+    setManualConstraints,
+    distances,
+    setDistances,
+    results,
+    setResults,
+    customEquipment,
+    onManageCustomEquipment,
+    compatibilityMatrix,
+    setCompatibilityMatrix,
+    equipmentOverrides,
+    tvChannelStates,
+    setTvChannelStates,
+    wmasState,
+    tvRegion = 'uk',
+    user,
+    distanceWeightingEnabled,
+    setDistanceWeightingEnabled
+}) => {
+    const abortControllerRef = useRef<AbortController | null>(null);
+    const [isLoading, setIsLoading] = useState(false);
+    const [progress, setProgress] = useState(0);
+    const [localChannelStates, setLocalChannelStates] = useState<Record<number, ChannelState>>({});
+    const channelStates = tvChannelStates || localChannelStates;
+    const updateChannelStates = setTvChannelStates || setLocalChannelStates;
+    const [showTabulation, setShowTabulation] = useState(false);
+    const [showSuccess, setShowSuccess] = useState(false);
+    const [proximityThreshold, setProximityThreshold] = useState<number>(10);
+    const [diagnostic, setDiagnostic] = useState<CoordinationDiagnostic | null>(null);
+    const [numZonesInput, setNumZonesInput] = useState(numZones.toString());
+    const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
+    const [isWwbSubmenuOpen, setIsWwbSubmenuOpen] = useState(false);
+    const [pdfTemplate, setPdfTemplate] = useState<File | null>(null);
+    const templateInputRef = useRef<HTMLInputElement>(null);
+    const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
+    
+    // Global Distance State
+    const [globalDistInput, setGlobalDistInput] = useState<string>("15");
+
+    // Sorting States
+    const [sortField, setSortField] = useState<string>('freq');
+    const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+    const [calculationStrategy, setCalculationStrategy] = useState<'even-distribution' | 'bottom-up' | 'top-down' | 'high-density'>('even-distribution');
+    const [engineIterations, setEngineIterations] = useState<number>(50);
+    const [showMatrixAndLinks, setShowMatrixAndLinks] = useState(false);
+
+    const currentTvChannels = useMemo(() => tvRegion === 'uk' ? UK_TV_CHANNELS : US_TV_CHANNELS, [tvRegion]);
+    const allTvChannels = Object.keys(currentTvChannels).map(Number);
+
+    const totalRequested = useMemo(() => equipmentGroups.reduce((a, b) => a + b.count, 0) + manualFrequencies.length, [equipmentGroups, manualFrequencies]);
+
+    const generatePdfForPreview = (profile: 'client-facing' | 'internal-crew', clientDetails?: any) => {
+        const doc = new jsPDF('p', 'mm', 'a4');
+        const planData = tabulatedData.map(row => {
+            const profileData = row.equipmentKey ? fullEquipmentDatabase[row.equipmentKey] : null;
+            
+            // Find the frequency object to get sourceRequestId
+            const zone = results?.zones.find(z => z.name === row.zone);
+            const freqObj = zone?.frequencies.find(f => f.id === row.id);
+            const req = equipmentGroups.find(g => g.name === freqObj?.sourceRequestId || g.equipmentKey === row.equipmentKey);
+
+            const params = req ? `${req.compatibilityLevel?.toUpperCase() || 'STD'}${req.linearMode ? ' (HD)' : ''}` : 'STD';
+            const power = profileData?.type === 'iem' ? '50mW' : '10mW';
+            const bandwidth = profileData?.type === 'wmas' ? '6MHz' : '200kHz';
+
+            const getThString = () => {
+                const level = req?.compatibilityLevel || 'standard';
+                const th = getFinalThresholds({ 
+                    equipmentKey: row.equipmentKey, 
+                    compatibilityLevel: level,
+                    manualThresholds: req?.useManualParams ? {
+                        fundamental: isNaN(Number(req.manualFundamental)) ? 0.35 : Number(req.manualFundamental),
+                        twoTone: isNaN(Number(req.manualTwoTone)) ? 0.075 : Number(req.manualTwoTone),
+                        threeTone: isNaN(Number(req.manualThreeTone)) ? 0.05 : Number(req.manualThreeTone),
+                        fiveTone: 0, sevenTone: 0
+                    } : undefined
+                }, fullEquipmentDatabase, {});
+                
+                return `${Math.round(th.fundamental * 1000)}, ${Math.round(th.twoTone * 1000)}, ${Math.round(th.threeTone * 1000)}`;
+            };
+
+            return {
+                frequency: row.freq,
+                label: row.label || '-',
+                equipment: row.modelName,
+                band: row.bandName,
+                power,
+                bandwidth,
+                parameters: params,
+                thresholds: getThString(),
+                stage: row.zone,
+                type: row.wwbType === 'In-ear Monitor' ? 'iem' : 'mic'
+            };
+        });
+
+        return generateFullCoordinationPdf(doc, 'Multi-Zone RF Coordination Plan', planData, user?.branding, clientDetails, profile);
+    };
+    const totalFound = useMemo(() => (results?.zones || []).reduce((s, z) => s + (z.frequencies || []).filter(f => f.value > 0).length, 0), [results]);
+
+    const handleDistanceChange = (row: number, col: number, value: string) => {
+        const next = distances.map(r => [...r]);
+        const val = parseInt(value, 10) || 0;
+        next[row][col] = val;
+        if (row !== col) next[col][row] = val;
+        setDistances(next);
+    };
+
+    const handleApplyGlobalDistance = () => {
+        const val = parseInt(globalDistInput, 10);
+        if (isNaN(val)) return;
+        const next = distances.map((row, rIdx) => 
+            row.map((col, cIdx) => (rIdx === cIdx ? 0 : val))
+        );
+        setDistances(next);
+    };
+
+    const handleMatrixChange = (row: number, col: number) => {
+        const next = compatibilityMatrix.map(r => [...r]);
+        next[row][col] = !next[row][col];
+        if (row !== col) next[col][row] = next[row][col];
+        setCompatibilityMatrix(next);
+    };
+
+    const handleTvChannelCycle = (channel: number) => {
+        updateChannelStates(prev => {
+            const current = prev[channel] || 'available';
+            let next: TVChannelState = 'available';
+            if (current === 'available') next = 'mic-only';
+            else if (current === 'mic-only') next = 'iem-only';
+            else if (current === 'iem-only') next = 'both';
+            else if (current === 'both') next = 'blocked';
+            else if (current === 'blocked') next = 'available';
+            return { ...prev, [channel]: next };
+        });
+    };
+
+    const handleResetChannels = () => {
+        updateChannelStates({});
+    };
+
+    const handleBlockAllChannels = () => {
+        const next: Record<number, ChannelState> = {};
+        allTvChannels.forEach(ch => {
+            next[ch] = 'blocked';
+        });
+        updateChannelStates(next);
+    };
+
+    const StatusPill = ({ label, value, color = 'indigo', subValue }: { label: string, value: string | number, color?: string, subValue?: string }) => {
+        const colorClasses = {
+            indigo: 'bg-indigo-500/10 border-indigo-500/20 text-indigo-300 ring-indigo-500/30',
+            emerald: 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300 ring-emerald-500/30',
+            rose: 'bg-rose-500/10 border-rose-500/20 text-rose-300 ring-rose-500/30',
+            amber: 'bg-amber-500/10 border-amber-500/20 text-amber-300 ring-amber-500/30'
+        }[color as 'indigo' | 'emerald' | 'rose' | 'amber'];
+
+        const reqTotal = totalRequested;
+
+        return (
+            <div className={`flex items-center gap-3 px-3 py-1.5 rounded-full border shadow-sm ring-1 ring-inset ${colorClasses} animate-in fade-in zoom-in duration-300`}>
+                <div className="flex flex-col">
+                    <span className="text-[8px] font-black uppercase tracking-widest opacity-60 leading-none mb-0.5">{label}</span>
+                    <div className="flex items-baseline gap-1">
+                        <span className="text-sm font-black tracking-tighter leading-none">{value}</span>
+                        {subValue && <span className="text-[9px] font-bold opacity-50">{subValue}</span>}
+                    </div>
+                </div>
+                {color === 'emerald' && totalFound >= reqTotal && reqTotal > 0 && (
+                    <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+                )}
+                {color === 'rose' && totalFound < reqTotal && (
+                    <div className="w-2 h-2 rounded-full bg-rose-400 animate-pulse shadow-[0_0_8px_rgba(251,113,113,0.8)]" />
+                )}
+            </div>
+        );
+    };
+
+    useEffect(() => {
+        setNumZonesInput(numZones.toString());
+    }, [numZones]);
+
+    const fullEquipmentDatabase = useMemo<Record<string, EquipmentProfile>>(() => {
+        const customProfiles = (customEquipment || []).reduce((acc: Record<string, EquipmentProfile>, profile) => {
+            if (profile.id) acc[profile.id] = profile;
+            return acc;
+        }, {} as Record<string, EquipmentProfile>);
+        return { ...EQUIPMENT_DATABASE, ...customProfiles };
+    }, [customEquipment]);
+
+    const { shureProfiles, sennheiserProfiles, lectrosonicsProfiles, otherStandardProfiles } = useMemo<{
+        shureProfiles: [string, EquipmentProfile][];
+        sennheiserProfiles: [string, EquipmentProfile][];
+        lectrosonicsProfiles: [string, EquipmentProfile][];
+        otherStandardProfiles: [string, EquipmentProfile][];
+    }>(() => {
+        const allEntries = Object.entries(fullEquipmentDatabase) as [string, EquipmentProfile][];
+        const shure = allEntries.filter(([, p]) => p.name.toLowerCase().includes('shure'));
+        const sennheiser = allEntries.filter(([, p]) => p.name.toLowerCase().includes('sennheiser'));
+        const lectrosonics = allEntries.filter(([, p]) => p.name.toLowerCase().includes('lectrosonics'));
+        const others = allEntries.filter(([k, p]) => 
+            !p.isCustom && 
+            k !== 'custom' && 
+            !p.name.toLowerCase().includes('shure') && 
+            !p.name.toLowerCase().includes('sennheiser') && 
+            !p.name.toLowerCase().includes('lectrosonics')
+        );
+        return { 
+            shureProfiles: shure, 
+            sennheiserProfiles: sennheiser, 
+            lectrosonicsProfiles: lectrosonics,
+            otherStandardProfiles: others
+        };
+    }, [fullEquipmentDatabase]);
+
+    const handleNumZonesChange = (val: string) => {
+        setNumZonesInput(val);
+        const parsed = parseInt(val, 10);
+        if (!isNaN(parsed) && parsed > 0 && parsed <= 50) {
+            setNumZones(parsed);
+        }
+    };
+
+    const handleRemoveZone = (index: number) => {
+        if (numZones <= 1) {
+            toast.error("At least one zone is required.");
+            return;
+        }
+
+        // 1. Update Zone Configs
+        const nextZoneConfigs = zoneConfigs.filter((_, i) => i !== index);
+        setZoneConfigs(nextZoneConfigs);
+
+        // 2. Update Equipment Groups
+        const nextGroups = equipmentGroups
+            .filter(g => g.zoneIndex !== index)
+            .map(g => ({
+                ...g,
+                zoneIndex: (g.zoneIndex ?? 0) > index ? (g.zoneIndex ?? 0) - 1 : g.zoneIndex
+            }));
+        setEquipmentGroups(nextGroups);
+
+        // 3. Update Manual Frequencies
+        if (setManualFrequencies) {
+            const nextManualFrequencies = manualFrequencies
+                .filter(f => f.zoneIndex !== index)
+                .map(f => ({
+                    ...f,
+                    zoneIndex: (f.zoneIndex ?? 0) > index ? (f.zoneIndex ?? 0) - 1 : f.zoneIndex
+                }));
+            setManualFrequencies(nextManualFrequencies);
+        }
+
+        // 4. Update Distances
+        const nextDistances = distances
+            .filter((_, i) => i !== index)
+            .map(row => row.filter((_, j) => j !== index));
+        setDistances(nextDistances);
+
+        // 5. Update Compatibility Matrix
+        const nextMatrix = compatibilityMatrix
+            .filter((_, i) => i !== index)
+            .map(row => row.filter((_, j) => j !== index));
+        setCompatibilityMatrix(nextMatrix);
+
+        // 6. Update Results if they exist
+        if (results) {
+            const nextResultsZones = results.zones.filter((_, i) => i !== index);
+            setResults({ ...results, zones: nextResultsZones });
+        }
+
+        // 7. Update Num Zones
+        setNumZones(numZones - 1);
+        toast.success(`Zone ${index + 1} removed.`);
+    };
+
+    const handleDeleteAllZones = () => {
+        if (window.confirm("Are you sure you want to delete all zones? This will reset the planning to a single empty zone.")) {
+            setNumZones(1);
+            setZoneConfigs([{ name: 'Zone 1', count: 0 }]);
+            setEquipmentGroups([]);
+            if (setManualFrequencies) setManualFrequencies([]);
+            setDistances([[0]]);
+            setCompatibilityMatrix([[false]]);
+            setResults(null);
+            toast.success("All zones cleared.");
+        }
+    };
+
+    const handleAddGroup = (zIdx: number = 0) => {
+        const newGroup: ZoneConfig = {
+            name: `Group ${equipmentGroups.length + 1}`,
+            count: 1,
+            equipmentKey: 'shure-ad-g56',
+            compatibilityLevel: 'standard',
+            zoneIndex: zIdx,
+            linearMode: false,
+            type: 'generic'
+        };
+        setEquipmentGroups([...equipmentGroups, newGroup]);
+    };
+
+    const handleDuplicateGroup = (index: number) => {
+        const source = equipmentGroups[index];
+        const newGroup: ZoneConfig = {
+            ...source,
+            name: `${source.name} (Copy)`
+        };
+        const next = [...equipmentGroups];
+        next.splice(index + 1, 0, newGroup);
+        setEquipmentGroups(next);
+    };
+
+    const handleRemoveGroup = (index: number) => {
+        const groupToRemove = equipmentGroups[index];
+        setEquipmentGroups(equipmentGroups.filter((_, i) => i !== index));
+        
+        // Clean up orphaned locked frequencies from the results to prevent them from persisting and confusing the user
+        if (results) {
+            const nextZones = results.zones.map(zone => ({
+                ...zone,
+                frequencies: zone.frequencies.filter(f => f.label !== groupToRemove.name)
+            }));
+            setResults({ ...results, zones: nextZones });
+        }
+    };
+
+    const handleGroupChange = (index: number, field: keyof ZoneConfig, value: any) => {
+        const nextGroups = [...equipmentGroups];
+        let updated = { ...nextGroups[index], [field]: value };
+
+        if (field === 'equipmentKey') {
+            const profile = fullEquipmentDatabase[value as string];
+            if (profile && profile.recommendedThresholds?.threeTone !== 0) {
+                updated.linearMode = false;
+            }
+        }
+
+        if (field === 'useManualParams' && value === true) {
+            const standardTh = getFinalThresholds(
+                { equipmentKey: updated.equipmentKey || 'custom', compatibilityLevel: 'standard' }, 
+                fullEquipmentDatabase, 
+                equipmentOverrides
+            );
+            updated.manualFundamental = updated.manualFundamental ?? standardTh.fundamental;
+            updated.manualTwoTone = updated.manualTwoTone ?? standardTh.twoTone;
+            updated.manualThreeTone = updated.manualThreeTone ?? standardTh.threeTone;
+        }
+
+        if (field === 'equipmentKey' && value !== 'custom') {
+            const profile = fullEquipmentDatabase[value];
+            if (profile) {
+                updated.customMin = profile.minFreq;
+                updated.customMax = profile.maxFreq;
+            }
+        }
+
+        nextGroups[index] = updated;
+        setEquipmentGroups(nextGroups);
+    };
+
+    const handleZoneNameChange = (index: number, name: string) => {
+        const nextConfigs = [...zoneConfigs];
+        nextConfigs[index] = { ...nextConfigs[index], name };
+        setZoneConfigs(nextConfigs);
+    };
+
+    const handleGlobalLock = (lock: boolean) => {
+        if (!results) return;
+        const nextZones = results.zones.map(zone => ({
+            ...zone,
+            frequencies: zone.frequencies.map(f => ({ ...f, locked: lock }))
+        }));
+        setResults({ ...results, zones: nextZones });
+    };
+
+    const handleZoneLock = (zoneIndex: number, lock: boolean) => {
+        if (!results) return;
+        const nextZones = results.zones.map((zone, idx) => {
+            if (idx !== zoneIndex) return zone;
+            return {
+                ...zone,
+                frequencies: zone.frequencies.map(f => ({ ...f, locked: lock }))
+            };
+        });
+        setResults({ ...results, zones: nextZones });
+    };
+
+    const handleIndividualLock = (freqId: string) => {
+        if (!results) return;
+        const nextZones = results.zones.map(zone => ({
+            ...zone,
+            frequencies: zone.frequencies.map(f => {
+                if (f.id === freqId) return { ...f, locked: !f.locked };
+                return f;
+            })
+        }));
+        setResults({ ...results, zones: nextZones });
+    };
+
+    const handleFrequencyValueChange = (freqId: string, newValue: string) => {
+        if (!results) return;
+        const val = parseFloat(newValue) || 0;
+        const nextZones = results.zones.map(zone => ({
+            ...zone,
+            frequencies: zone.frequencies.map(f => {
+                if (f.id === freqId) return { ...f, value: val };
+                return f;
+            })
+        }));
+        setResults({ ...results, zones: nextZones });
+    };
+    
+    const handleFrequencyStep = (freqId: string, direction: 'up' | 'down') => {
+        if (!results) return;
+        const nextZones = results.zones.map(zone => ({
+            ...zone,
+            frequencies: zone.frequencies.map(f => {
+                if (f.id === freqId) {
+                    const currentVal = f.value || 0;
+                    let step = 0.025;
+                    if (f.equipmentKey && fullEquipmentDatabase[f.equipmentKey]?.tuningStep) {
+                        step = fullEquipmentDatabase[f.equipmentKey].tuningStep;
+                    } else if (f.equipmentKey?.toLowerCase().includes('lectro')) {
+                        step = 0.1;
+                    }
+                    const newVal = parseFloat((direction === 'up' ? currentVal + step : currentVal - step).toFixed(5));
+                    return { ...f, value: newVal };
+                }
+                return f;
+            })
+        }));
+        setResults({ ...results, zones: nextZones });
+    };
+
+    const handleAddManualFrequency = (zoneIndex: number) => {
+        if (!results) return;
+        const nextZones = results.zones.map((zone, idx) => {
+            if (idx !== zoneIndex) return zone;
+            const newFreq: Frequency = {
+                id: `MANUAL-${Date.now()}-${Math.random()}`,
+                value: 0,
+                label: 'Manual Entry',
+                locked: false,
+                zoneIndex: zoneIndex
+            };
+            return {
+                ...zone,
+                frequencies: [...zone.frequencies, newFreq]
+            };
+        });
+        setResults({ ...results, zones: nextZones });
+    };
+
+    const handleRemoveFrequency = (freqId: string) => {
+        if (!results) return;
+        const nextZones = results.zones.map(zone => ({
+            ...zone,
+            frequencies: zone.frequencies.filter(f => f.id !== freqId)
+        }));
+        setResults({ ...results, zones: nextZones });
+    };
+
+    const handleAddFixedFreq = () => {
+        if (!setManualFrequencies) return;
+        const newFreq: Frequency = {
+            id: `FIXED-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+            value: 470.000,
+            label: 'Fixed Frequency',
+            locked: true,
+            zoneIndex: 0,
+            type: 'generic'
+        };
+        setManualFrequencies([...manualFrequencies, newFreq]);
+    };
+
+    const handleUpdateFixedFreq = (id: string, field: keyof Frequency, value: any) => {
+        if (!setManualFrequencies) return;
+        setManualFrequencies(manualFrequencies.map(f => f.id === id ? { ...f, [field]: value } : f));
+    };
+
+    const handleRemoveFixedFreq = (id: string) => {
+        if (!setManualFrequencies) return;
+        setManualFrequencies(manualFrequencies.filter(f => f.id !== id));
+    };
+
+    const handleAddManualConstraint = () => {
+        if (!setManualConstraints) return;
+        const newConstraint: Frequency = {
+            id: `EXCL-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+            value: 0,
+            label: '',
+            locked: true,
+            type: 'generic'
+        };
+        setManualConstraints([...manualConstraints, newConstraint]);
+    };
+
+    const handleUpdateManualConstraint = (index: number, field: keyof Frequency, value: any) => {
+        if (!setManualConstraints) return;
+        const next = [...manualConstraints];
+        next[index] = { ...next[index], [field]: value };
+        setManualConstraints(next);
+    };
+
+    const handleRemoveManualConstraint = (index: number) => {
+        if (!setManualConstraints) return;
+        setManualConstraints(manualConstraints.filter((_, i) => i !== index));
+    };
+
+    const handleCancel = () => {
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+            setIsLoading(false);
+            toast.info('Coordination cancelled');
+        }
+    };
+
+    const handleCalculate = async () => {
+        setIsLoading(true);
+        setProgress(0);
+        setDiagnostic(null);
+        
+        const controller = new AbortController();
+        abortControllerRef.current = controller;
+
+        try {
+            const tvExclusions: {min: number, max: number}[] = [];
+            Object.entries(channelStates).forEach(([chStr, state]) => {
+                const ch = Number(chStr);
+                if (state === 'blocked') {
+                    const range = currentTvChannels[ch];
+                    if (range) tvExclusions.push({ min: range[0], max: range[1] });
+                }
+            });
+
+            if (wmasState && wmasState.nodes) {
+                wmasState.nodes.forEach(node => {
+                    if (node.assignedBlock) {
+                        tvExclusions.push({
+                            min: node.assignedBlock.start,
+                            max: node.assignedBlock.end
+                        });
+                    }
+                });
+            }
+
+            const calculatedResults = await generateMultizoneFrequencies(
+                equipmentGroups,
+                fullEquipmentDatabase,
+                compatibilityMatrix,
+                distances,
+                results,
+                tvExclusions, 
+                equipmentOverrides,
+                channelStates,
+                tvRegion,
+                (p) => setProgress(p),
+                [...manualFrequencies, ...manualConstraints.map(c => ({ ...c, zoneIndex: -1 }))],
+                zoneConfigs,
+                controller.signal,
+                distanceWeightingEnabled !== false,
+                calculationStrategy,
+                engineIterations
+            );
+            setResults(calculatedResults);
+
+            const totalReq = totalRequested;
+            const totalFnd = (calculatedResults.zones || []).reduce((s, z) => s + (z.frequencies || []).filter(f=>f.value > 0).length, 0);
+            
+            const diag = getCoordinationDiagnostics(
+                totalReq, 
+                totalFnd, 
+                470, 702, [], 
+                { fundamental: 0.35, twoTone: 0.1, threeTone: 0.1, fiveTone: 0, sevenTone: 0 }
+            );
+            setDiagnostic(diag);
+            setShowSuccess(true);
+        } catch (error: any) {
+            if (error.message === 'AbortError') {
+                console.log('Coordination aborted');
+                return;
+            }
+            if (error.message && error.message.startsWith('TimeoutError')) {
+                toast.error(error.message);
+                return;
+            }
+            console.error("Calculation Error:", error);
+            toast.error("Coordination calculation failed. Check parameters.");
+        } finally {
+            setIsLoading(false);
+            abortControllerRef.current = null;
+        }
+    };
+
+    const handleSort = (field: string) => {
+        if (sortField === field) {
+            setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+        } else {
+            setSortField(field);
+            setSortDirection('asc');
+        }
+    };
+
+    const SortArrow = ({ field }: { field: string }) => {
+        if (sortField !== field) return <span className="ml-1 opacity-20 group-hover:opacity-100 transition-opacity">⇅</span>;
+        return <span className="ml-1 text-cyan-400 font-black">{sortDirection === 'asc' ? '▲' : '▼'}</span>;
+    };
+
+    const tabulatedData = useMemo(() => {
+        if (!results || !results.zones) return [];
+        const baseData = results.zones.flatMap(zone => (zone.frequencies || []).filter(f => f.value > 0).map(f => {
+            const profile = f.equipmentKey ? fullEquipmentDatabase[f.equipmentKey] : null;
+            return {
+                freq: f.value,
+                zone: zone.name,
+                id: f.id,
+                locked: !!f.locked,
+                label: f.label || 'Unlabelled',
+                modelName: profile?.name || 'Custom',
+                bandName: profile?.band.split(' ')[0] || 'Custom',
+                wwbType: f.type === 'iem' ? 'In-ear Monitor' : 'Frequency',
+                equipmentKey: f.equipmentKey
+            };
+        }));
+
+        return baseData.sort((a: any, b: any) => {
+            const valA = a[sortField];
+            const valB = b[sortField];
+            if (typeof valA === 'string' && typeof valB === 'string') {
+                const comparison = valA.localeCompare(valB);
+                return sortDirection === 'asc' ? comparison : -comparison;
+            }
+            const numA = parseFloat(valA) || 0;
+            const numB = parseFloat(valB) || 0;
+            return sortDirection === 'asc' ? numA - numB : numB - numA;
+        });
+    }, [results, fullEquipmentDatabase, sortField, sortDirection]);
+
+    const uniqueWwbGroups = useMemo(() => {
+        const groups: Record<string, { name: string, count: number }> = {};
+        tabulatedData.forEach(f => {
+            if (!f.equipmentKey) return;
+            if (!groups[f.equipmentKey]) {
+                groups[f.equipmentKey] = { name: f.modelName, count: 0 };
+            }
+            groups[f.equipmentKey].count++;
+        });
+        return Object.entries(groups).map(([key, data]) => ({ key, ...data }));
+    }, [tabulatedData]);
+
+    const handleWwbSmartExport = (eqKey?: string) => {
+        setIsExportMenuOpen(false);
+        setIsWwbSubmenuOpen(false);
+        let freqs = tabulatedData;
+        let filename = `WWB_COORD_MULTIZONE_${new Date().toISOString().slice(0, 10)}`;
+        if (eqKey) {
+            freqs = freqs.filter(f => f.equipmentKey === eqKey);
+            const group = uniqueWwbGroups.find(g => g.key === eqKey);
+            const cleanedName = (group?.name || eqKey).replace(/\s+/g, '_').toUpperCase();
+            filename += `_${cleanedName}`;
+        }
+        const content = freqs.map(f => f.freq.toFixed(3)).join('\n');
+        const blob = new Blob([content], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${filename}.txt`;
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    const handleExport = (format: 'pdf' | 'branded-pdf' | 'csv' | 'xls' | 'doc' | 'txt' | 'wwb' | 'pdf-template', templateFile?: File) => {
+        setIsExportMenuOpen(false);
+        const data = tabulatedData;
+        const filename = `multizone_rf_plan_${new Date().toISOString().slice(0, 10)}`;
+        const currentTemplate = templateFile || pdfTemplate;
+
+        if (format === 'wwb') {
+            let content = "Zone,Frequency,Channel Name,Manufacturer,Model,Band\n";
+            const escapeCSV = (val: any) => val ? `"${String(val).replace(/"/g, '""')}"` : '""';
+            data.forEach(row => {
+                const labelWithDevice = row.modelName ? `${row.label} (${row.modelName})` : row.label;
+                content += `${escapeCSV(row.zone)},${row.freq.toFixed(3)},${escapeCSV(labelWithDevice)},"Generic","Generic",""\n`;
+            });
+            const blob = new Blob([content], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${filename}_WWB_Coordination.csv`;
+            a.click();
+        } else if (format === 'csv' || format === 'xls') {
+            let content = "Frequency (MHz),Designation,ID,Location,Hardware Model\n";
+            data.forEach(row => {
+                content += `${row.freq.toFixed(3)},"${row.label || ''}",${row.id},"${row.zone}","${row.modelName} ${row.bandName}"\n`;
+            });
+            const blob = new Blob([content], { type: format === 'xls' ? 'application/vnd.ms-excel' : 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a'); a.href = url; a.download = `${filename}.${format}`; a.click();
+        } else if (format === 'txt') {
+            let content = "MULTI-ZONE RF COORDINATION PLAN\n=================================\n\n";
+            data.forEach(row => {
+                content += `${row.freq.toFixed(3)} MHz | ${row.label || 'No Label'} | ${row.zone} | ${row.modelName}\n`;
+            });
+            const blob = new Blob([content], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a'); a.href = url; a.download = `${filename}.txt`; a.click();
+        } else if (format === 'doc') {
+            let html = `<html><body><h1>Multi-Zone RF Coordination Plan</h1><table border="1">
+                <tr><th>Frequency (MHz)</th><th>Designation</th><th>ID</th><th>Location</th><th>Hardware</th></tr>
+                ${data.map(row => `<tr><td>${row.freq.toFixed(3)}</td><td>${row.label || ''}</td><td>${row.id}</td><td>${row.zone}</td><td>${row.modelName}</td></tr>`).join('')}
+            </table></body></html>`;
+            const blob = new Blob(['\ufeff', html], { type: 'application/msword' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a'); a.href = url; a.download = `${filename}.doc`; a.click();
+        } else if (format === 'pdf' || format === 'branded-pdf' || format === 'pdf-template') {
+            const doc = new jsPDF();
+            let startY = 20;
+            
+            if (format === 'pdf' || format === 'branded-pdf') {
+                if (format === 'branded-pdf') {
+                    startY = generateBrandedPdf(doc, "Multi-Zone RF Coordination Plan", user?.branding);
+                } else {
+                    doc.setFontSize(18);
+                    doc.text("Multi-Zone RF Coordination Plan", 14, startY);
+                    doc.setFontSize(10);
+                    doc.setTextColor(100, 116, 139);
+                    doc.text(`Generated: ${new Date().toLocaleString()}`, 14, startY + 8);
+                    startY += 20;
+                }
+            }
+
+            const tableData = data.map(row => [row.freq.toFixed(3), row.label || '—', row.zone, row.modelName]);
+            
+            autoTable(doc, {
+                startY: format === 'pdf-template' ? 60 : startY,
+                margin: { 
+                    top: format === 'pdf-template' ? 60 : 20, 
+                    bottom: format === 'pdf-template' ? 50 : 20 
+                },
+                head: [['Frequency', 'Designation', 'Location', 'Hardware']],
+                body: tableData,
+                columnStyles: {
+                    0: { cellWidth: 25 },
+                    1: { cellWidth: 55 },
+                    2: { cellWidth: 45 },
+                    3: { cellWidth: 'auto' }
+                },
+                ...getTableStyles(user?.branding?.brandColor, user?.branding)
+            });
+
+            if (format === 'pdf-template' && currentTemplate) {
+                const mergePdf = async () => {
+                    try {
+                        const jsPdfBytes = doc.output('arraybuffer');
+                        const templateBytes = await currentTemplate.arrayBuffer();
+                        
+                        const templateDoc = await PDFDocument.load(templateBytes);
+                        const contentDoc = await PDFDocument.load(jsPdfBytes);
+                        const mergedDoc = await PDFDocument.create();
+                        
+                        const [embeddedTemplate] = await mergedDoc.embedPdf(templateBytes, [0]);
+                        const contentIndices = contentDoc.getPageIndices();
+                        const embeddedContentPages = await mergedDoc.embedPdf(jsPdfBytes, contentIndices);
+                        
+                        for (let i = 0; i < embeddedContentPages.length; i++) {
+                            const page = mergedDoc.addPage([embeddedTemplate.width, embeddedTemplate.height]);
+                            
+                            page.drawPage(embeddedTemplate, {
+                                x: 0,
+                                y: 0,
+                                width: page.getWidth(),
+                                height: page.getHeight(),
+                            });
+                            
+                            page.drawPage(embeddedContentPages[i], {
+                                x: 0,
+                                y: 0,
+                                width: page.getWidth(),
+                                height: page.getHeight(),
+                            });
+                        }
+                        
+                        const mergedBytes = await mergedDoc.save();
+                        const blob = new Blob([mergedBytes], { type: 'application/pdf' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `${filename}_Template.pdf`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                    } catch (e) {
+                        console.error('Failed to merge PDF template:', e);
+                        toast.error('Failed to merge with the provided template. Make sure it is a valid PDF file.');
+                    }
+                };
+                mergePdf();
+            } else {
+                doc.save(`${filename}.pdf`);
+            }
+        }
+    };
+
+    const renderEquipmentOptions = () => (
+        <>
+            <optgroup label="General"><option value="custom">Custom Range</option></optgroup>
+            {customEquipment && customEquipment.length > 0 && <optgroup label="My Custom">{customEquipment.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</optgroup>}
+            <optgroup label="Shure">{(shureProfiles || []).map(([k, p]) => <option key={k} value={k}>{p.name} ({p.band})</option>)}</optgroup>
+            <optgroup label="Sennheiser">{(sennheiserProfiles || []).map(([k, p]) => <option key={k} value={k}>{p.name} ({p.band})</option>)}</optgroup>
+            <optgroup label="Lectrosonics">{(lectrosonicsProfiles || []).map(([k, p]) => <option key={k} value={k}>{p.name} ({p.band})</option>)}</optgroup>
+            {otherStandardProfiles && otherStandardProfiles.length > 0 && (
+                <optgroup label="Other Professional">
+                    {otherStandardProfiles.map(([k, p]) => (
+                        <option key={k} value={k}>{p.name} ({p.band})</option>
+                    ))}
+                </optgroup>
+            )}
+        </>
+    );
+
+    return (
+        <div className="space-y-6 relative">
+            <EngagingLoadingState 
+                isOpen={isLoading} 
+                progress={progress * 100} 
+                onCancel={handleCancel}
+            />
+            <CelebratorySuccessState 
+                isOpen={showSuccess} 
+                onClose={() => setShowSuccess(false)} 
+                frequenciesFound={totalFound}
+                frequenciesRequired={totalRequested}
+                stats={[
+                    { label: 'Frequencies Coordinated', value: totalFound },
+                    { label: 'Zones', value: numZones }
+                ]}
+            />
+            {/* Draggable Floating Generate Button */}
+            <motion.button
+                drag
+                dragMomentum={false}
+                onClick={() => { if (!isLoading) handleCalculate(); }}
+                disabled={isLoading}
+                className={`fixed bottom-12 right-12 z-[1000] cursor-grab active:cursor-grabbing shadow-2xl flex items-center justify-center gap-3 py-3 px-4 rounded-md font-black uppercase tracking-widest transition-colors border-b-4 ring-2 text-sm ${isLoading ? 'bg-slate-800 text-slate-500 border-slate-900 ring-slate-800/50 shadow-none' : 'bg-yellow-500 text-slate-900 border-yellow-700 hover:bg-yellow-400 ring-yellow-400/50 shadow-yellow-500/20'}`}
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+            >
+                {isLoading ? (
+                    <><span className="w-3.5 h-3.5 border-4 border-slate-500/20 border-t-slate-500 rounded-full animate-spin"></span>SEEKING...</>
+                ) : (
+                    <><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg> GENERATE</>
+                )}
+            </motion.button>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <Card className="!bg-slate-900/80 border-rose-500/30 !p-2 h-full flex flex-col justify-between">
+                    <div>
+                        <div className="flex justify-between items-center mb-4">
+                            <div>
+                                <CardTitle className="!mb-0 text-xs tracking-[0.2em] text-rose-300 uppercase font-black">📌 Fixed Frequency Injections</CardTitle>
+                                <p className="text-[8px] text-slate-500 uppercase font-bold tracking-tighter mt-0.5">Assign specific starting/fixed frequencies to zones.</p>
+                            </div>
+                            <button onClick={handleAddFixedFreq} className={`${greenButton} !px-2.5 !py-1 !text-[10px]`}>+ Add Fixed</button>
+                        </div>
+
+                        {manualFrequencies.length > 0 ? (
+                            <div className="overflow-x-auto rounded-md border border-white/5 shadow-2xl max-h-[360px] overflow-y-auto custom-scrollbar">
+                                <table className="w-full text-left border-collapse">
+                                    <thead>
+                                        <tr className="bg-slate-950 text-[8px] uppercase font-black text-slate-500 tracking-widest border-b border-white/10">
+                                            <th className="p-2">Zone</th>
+                                            <th className="p-2">Label</th>
+                                            <th className="p-2 text-center">Freq (MHz)</th>
+                                            <th className="p-2">Type</th>
+                                            <th className="p-2 w-10 text-right"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-white/5">
+                                        {manualFrequencies.map((freq) => (
+                                            <tr key={freq.id} className="hover:bg-rose-500/5 transition-colors group">
+                                                <td className="p-1.5">
+                                                    <select 
+                                                        value={freq.zoneIndex} 
+                                                        onChange={e => handleUpdateFixedFreq(freq.id, 'zoneIndex', parseInt(e.target.value))}
+                                                        className="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-1 text-[11px] text-rose-300 font-extrabold"
+                                                    >
+                                                        {zoneConfigs.map((zc, zIdx) => <option key={zIdx} value={zIdx}>Zone {zIdx + 1}: {zc.name.substring(0, 15)}{zc.name.length > 15 ? '...' : ''}</option>)}
+                                                    </select>
+                                                </td>
+                                                <td className="p-1.5">
+                                                    <input 
+                                                        type="text" 
+                                                        value={freq.label || ''} 
+                                                        onChange={e => handleUpdateFixedFreq(freq.id, 'label', e.target.value)} 
+                                                        placeholder="Presenter"
+                                                        className="w-full bg-slate-950 border border-slate-700 rounded px-1.5 py-1 text-[11px] text-white font-bold"
+                                                    />
+                                                </td>
+                                                <td className="p-1.5">
+                                                    <input 
+                                                        type="number" step="0.001"
+                                                        value={freq.value || ''} 
+                                                        onChange={e => handleUpdateFixedFreq(freq.id, 'value', parseFloat(e.target.value))} 
+                                                        className="w-20 bg-slate-950 border border-slate-700 rounded px-1.5 py-1 text-[11px] text-center text-cyan-400 font-mono font-black"
+                                                    />
+                                                </td>
+                                                <td className="p-1.5">
+                                                    <select 
+                                                        value={freq.type || 'generic'} 
+                                                        onChange={e => handleUpdateFixedFreq(freq.id, 'type', e.target.value)}
+                                                        className="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-1 text-[10px] uppercase font-black text-slate-200"
+                                                    >
+                                                        <option value="generic">Generic</option>
+                                                        <option value="mic">Mic</option>
+                                                        <option value="iem">IEM</option>
+                                                        <option value="comms">Comms</option>
+                                                    </select>
+                                                </td>
+                                                <td className="p-1.5 text-right">
+                                                    <button 
+                                                        onClick={() => handleRemoveFixedFreq(freq.id)} 
+                                                        className="text-rose-500 hover:text-rose-400 font-black text-[14px]"
+                                                        title="Remove Fixed Frequency"
+                                                    >
+                                                        &times;
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        ) : (
+                            <div className="text-center py-4 bg-slate-950/50 rounded-md border border-dashed border-slate-700">
+                                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">No fixed frequencies added.</p>
+                            </div>
+                        )}
+                    </div>
+                </Card>
+
+                <Card className="!bg-slate-900/80 border-amber-500/30 !p-2 h-full flex flex-col justify-between">
+                    <div>
+                        <div className="flex justify-between items-center mb-4">
+                            <div>
+                                <CardTitle className="!mb-0 text-xs tracking-[0.2em] text-amber-300 uppercase font-black">✍️ Manual Exclusions</CardTitle>
+                                <p className="text-[8px] text-slate-500 uppercase font-bold tracking-tighter mt-0.5">Spot frequencies to globally avoid during coordination.</p>
+                            </div>
+                            <button onClick={handleAddManualConstraint} className="px-2.5 py-1 bg-amber-600/20 text-amber-300 border border-amber-500/40 hover:bg-amber-600 hover:text-white rounded-sm font-semibold uppercase tracking-wide transition-all duration-200 text-[10px]">+ Add Exclusion</button>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2.5 custom-scrollbar max-h-[360px] overflow-y-auto">
+                            {manualConstraints.map((freq, i) => (
+                                <div key={freq.id || i} className="flex flex-col gap-1 items-center bg-slate-950 p-2 rounded-md border border-white/5 group hover:border-amber-500/30 transition-all relative w-[136px] flex-shrink-0">
+                                    <div className="flex items-center justify-between w-full mb-0.5">
+                                        <label className="text-[8px] text-slate-600 font-mono font-bold">#{i + 1}</label>
+                                        <button onClick={() => handleRemoveManualConstraint(i)} className="text-red-400/50 hover:text-red-400 transition-colors px-1 text-md leading-none">&times;</button>
+                                    </div>
+                                    <ManualFreqInput 
+                                        value={freq.value} 
+                                        onChange={val => handleUpdateManualConstraint(i, 'value', val)}
+                                        className="bg-slate-900 border border-slate-700 rounded-sm p-1 text-amber-300 text-[11px] font-black font-mono focus:ring-1 focus:ring-amber-500 outline-none shadow-inner w-full text-center"
+                                    />
+                                    <input 
+                                        type="text" 
+                                        placeholder="Label" 
+                                        value={freq.label || ''} 
+                                        onChange={e => handleUpdateManualConstraint(i, 'label', e.target.value)}
+                                        className="bg-slate-900 border border-slate-700 rounded-sm p-1 text-slate-300 text-[9px] font-bold w-full text-center"
+                                    />
+                                    <select 
+                                        value={freq.type || 'generic'} 
+                                        onChange={e => handleUpdateManualConstraint(i, 'type', e.target.value)}
+                                        className="bg-slate-800 border border-slate-700 rounded p-0.5 text-slate-400 text-[8px] font-black uppercase tracking-tighter w-full text-center"
+                                    >
+                                        <option value="mic">Mic</option>
+                                        <option value="iem">IEM</option>
+                                        <option value="comms">Comms</option>
+                                        <option value="generic">Gen</option>
+                                    </select>
+                                    
+                                    {/* Exclusion Criteria */}
+                                    <div className="w-full mt-1.5 pt-1.5 border-t border-slate-800/80">
+                                        <p className="text-[7px] text-slate-500 uppercase font-bold tracking-widest text-center mb-1">Exclusion Rules</p>
+                                        <div className="grid grid-cols-3 gap-0.5">
+                                            <div className="flex flex-col">
+                                                <label className="text-[6px] text-slate-600 text-center mb-0.5">F-F</label>
+                                                <input 
+                                                    type="number" 
+                                                    step="0.025"
+                                                    min="0"
+                                                    placeholder="0.35"
+                                                    value={freq.manualThresholds?.fundamental ?? ''}
+                                                    onChange={e => {
+                                                        const val = e.target.value ? parseFloat(e.target.value) : undefined;
+                                                        const currentTh = freq.manualThresholds || { fundamental: 0.35, twoTone: 0.05, threeTone: 0.05 };
+                                                        handleUpdateManualConstraint(i, 'manualThresholds', { ...currentTh, fundamental: val });
+                                                    }}
+                                                    className="bg-slate-900 border border-slate-700 rounded p-0.5 text-slate-300 text-[8px] text-center w-full focus:border-amber-500 outline-none"
+                                                />
+                                            </div>
+                                            <div className="flex flex-col">
+                                                <label className="text-[6px] text-slate-600 text-center mb-0.5">2-Tx</label>
+                                                <input 
+                                                    type="number" 
+                                                    step="0.025"
+                                                    min="0"
+                                                    placeholder="0.05"
+                                                    value={freq.manualThresholds?.twoTone ?? ''}
+                                                    onChange={e => {
+                                                        const val = e.target.value ? parseFloat(e.target.value) : undefined;
+                                                        const currentTh = freq.manualThresholds || { fundamental: 0.35, twoTone: 0.05, threeTone: 0.05 };
+                                                        handleUpdateManualConstraint(i, 'manualThresholds', { ...currentTh, twoTone: val });
+                                                    }}
+                                                    className="bg-slate-900 border border-slate-700 rounded p-0.5 text-slate-300 text-[8px] text-center w-full focus:border-amber-500 outline-none"
+                                                />
+                                            </div>
+                                            <div className="flex flex-col">
+                                                <label className="text-[6px] text-slate-600 text-center mb-0.5">3-Tx</label>
+                                                <input 
+                                                    type="number" 
+                                                    step="0.025"
+                                                    min="0"
+                                                    placeholder="0.05"
+                                                    value={freq.manualThresholds?.threeTone ?? ''}
+                                                    onChange={e => {
+                                                        const val = e.target.value ? parseFloat(e.target.value) : undefined;
+                                                        const currentTh = freq.manualThresholds || { fundamental: 0.35, twoTone: 0.05, threeTone: 0.05 };
+                                                        handleUpdateManualConstraint(i, 'manualThresholds', { ...currentTh, threeTone: val });
+                                                    }}
+                                                    className="bg-slate-900 border border-slate-700 rounded p-0.5 text-slate-300 text-[8px] text-center w-full focus:border-amber-500 outline-none"
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                            {manualConstraints.length === 0 && (
+                                <div className="py-4 text-center border-2 border-dashed border-white/5 rounded-md bg-black/20 w-full">
+                                    <p className="text-[9px] text-slate-600 font-black uppercase tracking-widest">No Manual Exclusions Entered</p>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </Card>
+            </div>
+
+            <Card>
+                <div className="flex justify-between items-center mb-6">
+                    <div>
+                        <CardTitle className="!mb-0">🏢 Zonal Site Planning</CardTitle>
+                        <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">Multi-Equipment Spatial Coordination Engine</p>
+                    </div>
+                    <div className="flex gap-2 items-center">
+                        <button 
+                            onClick={handleDeleteAllZones}
+                            className="text-[9px] font-black uppercase bg-rose-500/10 text-rose-400 border border-rose-500/30 px-3 py-1.5 rounded-sm hover:bg-rose-600 hover:text-white transition-all"
+                        >
+                            Delete All Zones
+                        </button>
+                        <div className="flex flex-col items-end">
+                            <label className="text-[9px] text-slate-500 font-black uppercase mb-1">Zones/Locations</label>
+                            <div className="flex items-center bg-slate-950 border border-slate-700 rounded">
+                                <button 
+                                    onClick={() => handleNumZonesChange((Math.max(1, parseInt(numZonesInput || '1') - 1)).toString())}
+                                    className="px-2.5 py-1.5 text-slate-400 hover:text-white hover:bg-slate-800 transition-colors rounded-l text-xs font-bold"
+                                >
+                                    -
+                                </button>
+                                <input 
+                                    type="number" 
+                                    value={numZonesInput} 
+                                    onChange={e => handleNumZonesChange(e.target.value)} 
+                                    min="1" 
+                                    max="50" 
+                                    className="w-10 bg-transparent p-1.5 text-xs text-center text-indigo-400 font-black outline-none appearance-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" 
+                                />
+                                <button 
+                                    onClick={() => handleNumZonesChange((Math.min(50, parseInt(numZonesInput || '1') + 1)).toString())}
+                                    className="px-2.5 py-1.5 text-slate-400 hover:text-white hover:bg-slate-800 transition-colors rounded-r text-xs font-bold"
+                                >
+                                    +
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2 p-2 bg-slate-950/50 rounded-md border border-white/5">
+                    <div className="lg:col-span-3">
+                        <label className="text-[10px] text-slate-500 font-black uppercase mb-2 block tracking-widest">Zone Designation List</label>
+                        <div className="flex flex-wrap gap-3">
+                            {zoneConfigs.map((cfg, idx) => (
+                                <div key={idx} className="flex bg-slate-800 rounded-sm border border-slate-700 overflow-hidden shadow-md group">
+                                    <span className="bg-slate-700 px-2 flex items-center text-[10px] font-black text-slate-400">{idx + 1}</span>
+                                    <input 
+                                        type="text" 
+                                        value={cfg.name} 
+                                        onChange={e => handleZoneNameChange(idx, e.target.value)} 
+                                        className="bg-transparent px-2 py-1 text-[11px] text-white font-bold outline-none w-32 focus:bg-indigo-900/30"
+                                    />
+                                    <button 
+                                        onClick={() => handleAddGroup(idx)}
+                                        className="px-2 bg-emerald-600/20 text-emerald-400 border-l border-white/5 hover:bg-emerald-600 hover:text-white transition-all text-[10px] font-black"
+                                        title="Add Equipment to this Zone"
+                                    >
+                                        + GEAR
+                                    </button>
+                                    <button 
+                                        onClick={() => handleRemoveZone(idx)}
+                                        className="px-2 bg-rose-600/20 text-rose-400 border-l border-white/5 hover:bg-rose-600 hover:text-white transition-all text-[12px] font-black"
+                                        title="Delete this Zone"
+                                    >
+                                        &times;
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                    <div className="flex flex-col justify-center items-end">
+                        <label className="text-[10px] text-slate-500 font-black uppercase mb-1 block">Proximity Guard (m)</label>
+                        <input type="number" value={proximityThreshold} onChange={e => setProximityThreshold(Number(e.target.value))} className="w-20 bg-slate-800 border border-slate-700 rounded p-1.5 text-xs text-center text-cyan-400 font-black" />
+                    </div>
+                </div>
+            </Card>
+
+            <Card>
+                <div className="flex justify-between items-center mb-4">
+                    <div>
+                        <CardTitle className="!mb-0 text-sm tracking-widest text-indigo-300 uppercase font-black flex items-center">
+                            📺 Quad-State TV Grid
+                            <InfoTooltip content="Manage TV channel exclusions. Click a channel to cycle through states: Available (Green), Blocked (Red). During coordination, designate channels for Mics Only (Blue), IEMs Only (Amber), Mic or IEM (Purple)" />
+                        </CardTitle>
+                        <p className="text-[9px] text-slate-500 uppercase font-bold tracking-tighter mt-1">Prescribe specific channels for separation. Click to cycle states.</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <div className="flex gap-3 text-[8px] font-black uppercase overflow-x-auto pb-1 scrollbar-hide">
+                            <div className="flex items-center gap-1.5 whitespace-nowrap"><div className="w-2 h-2 rounded bg-emerald-500/10 border border-emerald-500/30" /> <span className="text-slate-400">Available</span></div>
+                            <div className="flex items-center gap-1.5 whitespace-nowrap"><div className="w-2 h-2 rounded bg-sky-400 border border-sky-300" /> <span className="text-sky-400">Mic Only</span></div>
+                            <div className="flex items-center gap-1.5 whitespace-nowrap"><div className="w-2 h-2 rounded bg-amber-500 border border-amber-400" /> <span className="text-amber-500">IEM Only</span></div>
+                            <div className="flex items-center gap-1.5 whitespace-nowrap"><div className="w-2 h-2 rounded bg-rose-600 border border-rose-500" /> <span className="text-rose-500">Blocked</span></div>
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={handleBlockAllChannels} className="text-[9px] font-black uppercase bg-rose-500/20 text-rose-400 border border-rose-500/30 px-2 py-1 rounded hover:bg-rose-600 hover:text-white transition-all">Block All</button>
+                            <button onClick={handleResetChannels} className="text-[9px] font-black uppercase bg-slate-800 text-slate-400 border border-slate-700 px-2 py-1 rounded hover:bg-slate-700 hover:text-white transition-all">Clear All</button>
+                        </div>
+                    </div>
+                </div>
+                <TvGrid 
+                    title=""
+                    tvRegion="uk"
+                    tvChannelStates={channelStates}
+                    setTvChannelStates={updateChannelStates}
+                    handleTvChannelCycle={handleTvChannelCycle}
+                    handleBlockAllTvChannels={handleBlockAllChannels}
+                    handleClearTv={handleResetChannels}
+                />
+            </Card>
+
+            <Card className="!bg-slate-900/80 border-indigo-500/30">
+                <div className="flex justify-between items-center mb-6 bg-slate-900/95 py-2 -mx-4 px-3 backdrop-blur-md border-b border-white/5 shadow-sm border border-slate-700/50">
+                    <div className="flex items-center gap-4">
+                        <div>
+                            <CardTitle className="!mb-0 text-sm tracking-[0.2em] text-indigo-300 uppercase font-black">⚙️ Hardware Deployment Ledger</CardTitle>
+                            <p className="text-[8px] text-slate-500 font-bold uppercase mt-1">Configure individual equipment groups and zones</p>
+                        </div>
+                        <div className="flex gap-2">
+                            <StatusPill 
+                                label="Yield" 
+                                value={`${totalFound}/${totalRequested}`} 
+                                color={!results ? 'indigo' : (totalFound >= totalRequested ? 'emerald' : 'rose')} 
+                                subValue={!results ? 'Pending' : undefined}
+                            />
+                            <StatusPill label="Zones" value={numZones} color="indigo" />
+                        </div>
+                    </div>
+                    <div className="flex gap-3">
+                        <button onClick={() => handleAddGroup()} className={greenButton}>+ Add General Hardware Row</button>
+                        <button onClick={handleCalculate} disabled={isLoading} className={primaryButton}>
+                            {isLoading ? 'DEEP SCAN...' : '⚡ GENERATE'}
+                        </button>
+                    </div>
+                </div>
+
+                <div className="overflow-x-auto rounded-md border border-white/5 shadow-2xl">
+                    <table className="w-full text-left border-collapse">
+                        <thead className="bg-slate-950/90 backdrop-blur-sm shadow-sm ring-1 ring-white/5">
+                            <tr className="text-[9px] uppercase font-black text-slate-500 tracking-widest border-b border-white/10">
+                                <th className="p-2">Zone Assignment</th>
+                                <th className="p-2">Hardware Group Name</th>
+                                <th className="p-2">Hardware Profile</th>
+                                <th className="p-2 w-16 text-center">Qty</th>
+                                <th className="p-2">Type</th>
+                                <th className="p-2">IMD Level</th>
+                                <th className="p-2">HD Mode</th>
+                                <th className="p-2">Custom Range</th>
+                                <th className="p-2 text-center">Bespoke</th>
+                                <th className="p-2 w-20 text-right">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-white/5">
+                            {equipmentGroups.map((group, idx) => {
+                                const activeTh = group.useManualParams 
+                                    ? { fundamental: group.manualFundamental ?? 0, twoTone: group.manualTwoTone ?? 0, threeTone: group.manualThreeTone ?? 0 }
+                                    : getFinalThresholds({ equipmentKey: group.equipmentKey || 'custom', compatibilityLevel: group.compatibilityLevel || 'standard' }, fullEquipmentDatabase, equipmentOverrides);
+
+                                return (
+                                    <tr key={idx} className="hover:bg-indigo-500/5 transition-colors group">
+                                        <td className="p-2">
+                                            <select 
+                                                value={group.zoneIndex} 
+                                                onChange={e => handleGroupChange(idx, 'zoneIndex', parseInt(e.target.value))}
+                                                className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs text-indigo-300 font-black"
+                                            >
+                                                {zoneConfigs.map((zc, zIdx) => <option key={zIdx} value={zIdx}>Zone {zIdx + 1}: {zc.name}</option>)}
+                                            </select>
+                                        </td>
+                                        <td className="p-2">
+                                            <input 
+                                                type="text" 
+                                                value={group.name} 
+                                                onChange={e => handleGroupChange(idx, 'name', e.target.value)} 
+                                                placeholder="Group ID"
+                                                className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-xs text-white font-bold"
+                                            />
+                                        </td>
+                                        <td className="p-2">
+                                            <select 
+                                                value={group.equipmentKey} 
+                                                onChange={e => handleGroupChange(idx, 'equipmentKey', e.target.value)}
+                                                className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs text-slate-300"
+                                            >
+                                                {renderEquipmentOptions()}
+                                            </select>
+                                        </td>
+                                        <td className="p-2">
+                                            <input 
+                                                type="number" 
+                                                value={group.count} 
+                                                onChange={e => handleGroupChange(idx, 'count', parseInt(e.target.value) || 0)} 
+                                                className="w-14 bg-slate-950 border border-slate-700 rounded px-1.5 py-1.5 text-xs text-center text-indigo-400 font-black"
+                                            />
+                                        </td>
+                                        <td className="p-2">
+                                            <select 
+                                                value={group.type || fullEquipmentDatabase[group.equipmentKey || 'custom']?.type || 'generic'} 
+                                                onChange={e => handleGroupChange(idx, 'type', e.target.value)}
+                                                className="w-full bg-slate-800 border border-blue-500/30 rounded px-2 py-1.5 text-[10px] uppercase font-black text-slate-200"
+                                            >
+                                                <option value="generic">Gen</option>
+                                                <option value="mic">Mic</option>
+                                                <option value="iem">IEM</option>
+                                                <option value="comms">Com</option>
+                                                <option value="wmas">WMAS</option>
+                                            </select>
+                                        </td>
+                                        <td className="p-2">
+                                            <div className="relative group/tooltip">
+                                                <select 
+                                                    value={group.compatibilityLevel} 
+                                                    onChange={e => handleGroupChange(idx, 'compatibilityLevel', e.target.value)}
+                                                    disabled={group.useManualParams}
+                                                    className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-[10px] uppercase font-black text-slate-400 disabled:opacity-30"
+                                                >
+                                                    <option value="standard">Standard</option>
+                                                    <option value="aggressive">Aggressive</option>
+                                                    <option value="robust">Robust</option>
+                                                </select>
+                                                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover/tooltip:block z-[200] animate-in fade-in zoom-in-95 duration-200">
+                                                    <div className="bg-slate-950 border border-indigo-500/50 rounded-md shadow-2xl backdrop-blur-xl whitespace-nowrap p-3">
+                                                        <div className="flex gap-2 items-center">
+                                                            <div className="flex flex-col">
+                                                                <span className="text-[8px] font-black text-slate-500 uppercase tracking-tighter">Fundamental</span>
+                                                                <span className="text-[10px] font-mono font-bold text-indigo-300">{(activeTh.fundamental * 1000).toFixed(0)}kHz</span>
+                                                            </div>
+                                                            <div className="w-px h-4 bg-white/10" />
+                                                            <div className="flex flex-col">
+                                                                <span className="text-[8px] font-black text-slate-500 uppercase tracking-tighter">2-Tone</span>
+                                                                <span className="text-[10px] font-mono font-bold text-rose-300">{(activeTh.twoTone * 1000).toFixed(0)}kHz</span>
+                                                            </div>
+                                                            <div className="w-px h-4 bg-white/10" />
+                                                            <div className="flex flex-col">
+                                                                <span className="text-[8px] font-black text-slate-500 uppercase tracking-tighter">3-Tone</span>
+                                                                <span className="text-[10px] font-mono font-bold text-purple-300">{(activeTh.threeTone * 1000).toFixed(0)}kHz</span>
+                                                            </div>
+                                                        </div>
+                                                        <div className="absolute top-full left-1/2 -translate-x-1/2 border-8 border-transparent border-t-slate-950" />
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td className="p-2">
+                                            {fullEquipmentDatabase[group.equipmentKey || 'custom']?.recommendedThresholds?.threeTone === 0 && (
+                                                <label className="flex items-center justify-center cursor-pointer group/lin">
+                                                    <input 
+                                                        type="checkbox" 
+                                                        checked={group.linearMode} 
+                                                        onChange={e => handleGroupChange(idx, 'linearMode', e.target.checked)} 
+                                                        className="w-4 h-4 rounded accent-cyan-500 bg-slate-900 border-slate-700" 
+                                                    />
+                                                    <div className="hidden group-hover/lin:block absolute bottom-full mb-2 z-50 bg-slate-950 border border-cyan-500/50 p-2 rounded text-[8px] text-cyan-200 uppercase font-black w-32 text-center shadow-2xl">
+                                                        Forces 0kHz IMD guards. USE FOR DIGITAL ONLY.
+                                                    </div>
+                                                </label>
+                                            )}
+                                        </td>
+                                        <td className="p-2">
+                                            <div className="flex gap-2">
+                                                <input 
+                                                    type="number" step="0.001" value={group.customMin} 
+                                                    onChange={e => handleGroupChange(idx, 'customMin', parseFloat(e.target.value))}
+                                                    className="w-16 bg-slate-950 border border-slate-700 rounded px-1.5 py-1.5 text-[10px] text-cyan-400 font-mono text-center" 
+                                                />
+                                                <input 
+                                                    type="number" step="0.001" value={group.customMax} 
+                                                    onChange={e => handleGroupChange(idx, 'customMax', parseFloat(e.target.value))}
+                                                    className="w-16 bg-slate-950 border border-slate-700 rounded px-1.5 py-1.5 text-[10px] text-cyan-400 font-mono text-center" 
+                                                />
+                                            </div>
+                                        </td>
+                                        <td className="p-2 text-center">
+                                            <div className="flex flex-col items-center gap-1.5 justify-center">
+                                                <input type="checkbox" checked={group.useManualParams} onChange={e => handleGroupChange(idx, 'useManualParams', e.target.checked)} className="w-4 h-4 accent-amber-500" />
+                                                {group.useManualParams && (
+                                                    <div className="flex gap-1 animate-in fade-in slide-in-from-top-1">
+                                                        <div className="flex flex-col items-center">
+                                                            <span className="text-[7px] text-slate-500 font-bold uppercase tracking-tighter">FF</span>
+                                                            <input 
+                                                                type="number" step="0.001" 
+                                                                value={group.manualFundamental ?? ''} 
+                                                                onChange={e => handleGroupChange(idx, 'manualFundamental', parseFloat(e.target.value))}
+                                                                className="w-16 bg-slate-950 border border-amber-500/30 rounded p-0.5 text-[9px] text-amber-400 text-center font-mono" 
+                                                            />
+                                                        </div>
+                                                        <div className="flex flex-col items-center">
+                                                            <span className="text-[7px] text-slate-500 font-bold uppercase tracking-tighter">2T</span>
+                                                            <input 
+                                                                type="number" step="0.001" 
+                                                                value={group.manualTwoTone ?? ''} 
+                                                                onChange={e => handleGroupChange(idx, 'manualTwoTone', parseFloat(e.target.value))}
+                                                                className="w-16 bg-slate-950 border border-amber-500/30 rounded p-0.5 text-[9px] text-amber-400 text-center font-mono" 
+                                                            />
+                                                        </div>
+                                                        <div className="flex flex-col items-center">
+                                                            <span className="text-[7px] text-slate-500 font-bold uppercase tracking-tighter">3T</span>
+                                                            <input 
+                                                                type="number" step="0.001" 
+                                                                value={group.manualThreeTone ?? ''} 
+                                                                onChange={e => handleGroupChange(idx, 'manualThreeTone', parseFloat(e.target.value))}
+                                                                className="w-16 bg-slate-950 border border-amber-500/30 rounded p-0.5 text-[9px] text-amber-400 text-center font-mono" 
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </td>
+                                        <td className="p-2 text-right">
+                                            <div className="flex justify-end gap-3 opacity-0 group-hover:opacity-100 transition-opacity pr-2">
+                                                <button 
+                                                    onClick={() => handleDuplicateGroup(idx)} 
+                                                    className="text-cyan-400 hover:text-cyan-300 font-black text-[10px] uppercase tracking-tighter"
+                                                    title="Duplicate Row"
+                                                >
+                                                    Clone
+                                                </button>
+                                                <button 
+                                                    onClick={() => handleRemoveGroup(idx)} 
+                                                    className="text-rose-500 hover:text-rose-400 font-black text-[16px]"
+                                                    title="Delete Row"
+                                                >
+                                                    &times;
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+
+                <div className="mt-6 flex flex-col sm:flex-row justify-between items-center gap-2">
+                    <div className="flex gap-2">
+                        <div className="bg-slate-950 px-3 py-2 rounded-md border border-white/5 flex items-center">
+                            <span className="text-[10px] text-slate-500 uppercase font-black">Total Requested Units:</span>
+                            <span className="ml-2 text-base font-medium text-white font-black">{totalRequested}</span>
+                        </div>
+                        <div className="bg-slate-950 px-3 py-2 rounded-md border border-white/5 flex items-center gap-2">
+                            <span className="text-[10px] text-slate-500 uppercase font-black">Allocation Strategy:</span>
+                            <select
+                                value={calculationStrategy}
+                                onChange={(e: any) => setCalculationStrategy(e.target.value)}
+                                className="bg-slate-900 border border-slate-700 rounded text-xs text-indigo-300 outline-none px-2 py-1 font-bold"
+                            >
+                                <option value="even-distribution">Even Distribution</option>
+                                <option value="bottom-up">Bottom-Up Packing</option>
+                                <option value="top-down">Top-Down Packing</option>
+                                <option value="high-density">High Density Packing</option>
+                            </select>
+                        </div>
+                        <div className="bg-slate-950 px-3 py-2 rounded-md border border-white/5 flex items-center gap-2">
+                            <span className="text-[10px] text-slate-500 uppercase font-black">Optimization Depth:</span>
+                            <select
+                                value={engineIterations}
+                                onChange={(e: any) => setEngineIterations(Number(e.target.value))}
+                                className="bg-slate-900 border border-slate-700 rounded text-xs text-indigo-300 outline-none px-2 py-1 font-bold"
+                            >
+                                <option value={1}>1 Pass (Standard)</option>
+                                <option value={5}>5 Passes (Deep)</option>
+                                <option value={20}>20 Passes (Exhaustive)</option>
+                                <option value={50}>50 Passes (Maximum)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <button onClick={handleCalculate} disabled={isLoading} className={primaryButton}>
+                        {isLoading ? 'DEEP SCAN IN PROGRESS...' : 'GENERATE'}
+                    </button>
+                </div>
+            </Card>
+
+            <div className="flex justify-between items-center bg-slate-900 border border-slate-700/50 rounded-md p-3 shadow-sm">
+                <div className="flex items-center gap-2">
+                    <span className="text-lg font-semibold">⚙️</span>
+                    <div>
+                        <h3 className="text-[11px] font-black uppercase tracking-widest text-slate-300">Zone Interaction Settings</h3>
+                        <p className="text-[9px] text-slate-500 font-medium">Distance Matrix & Manual IMD Links</p>
+                    </div>
+                </div>
+                <button 
+                    onClick={() => setShowMatrixAndLinks(!showMatrixAndLinks)} 
+                    className="px-3 py-2 bg-slate-800 text-slate-300 border border-slate-700 rounded-sm text-[10px] font-black uppercase hover:bg-slate-700 hover:text-white transition-all shadow-sm"
+                >
+                    {showMatrixAndLinks ? 'Hide Interaction Settings' : 'Show Interaction Settings'}
+                </button>
+            </div>
+
+            {showMatrixAndLinks && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 animate-in fade-in slide-in-from-top-2 duration-300">
+                <Card>
+                    <div className="flex justify-between items-center mb-4">
+                        <CardTitle className="!mb-0 text-sm font-black uppercase tracking-widest">📍 Distance Matrix (m)</CardTitle>
+                        <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2">
+                                <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">
+                                    Distance Weighting:
+                                </label>
+                                <button
+                                    onClick={() => setDistanceWeightingEnabled(!distanceWeightingEnabled)}
+                                    className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${distanceWeightingEnabled !== false ? 'bg-emerald-500' : 'bg-slate-700'}`}
+                                >
+                                    <span className={`inline-block h-2 w-2 transform rounded-full bg-white transition-transform ${distanceWeightingEnabled !== false ? 'translate-x-3.5' : 'translate-x-1'}`} />
+                                </button>
+                            </div>
+                            <div className="flex bg-slate-950 border border-indigo-500/30 rounded-sm p-1 items-center gap-2">
+                            <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest px-2">Global Separation:</span>
+                            <input 
+                                type="number" 
+                                value={globalDistInput} 
+                                onChange={e => setGlobalDistInput(e.target.value)}
+                                className="w-12 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-xs font-mono text-cyan-400 text-center outline-none" 
+                            />
+                            <button 
+                                onClick={handleApplyGlobalDistance}
+                                className="bg-indigo-600 hover:bg-indigo-500 text-white text-[8px] font-black uppercase px-2 py-1 rounded transition-colors"
+                            >
+                                Apply All
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div className="overflow-x-auto rounded-sm border border-slate-700 shadow-inner bg-black/20">
+                        <table className="w-full text-[10px] border-collapse text-center">
+                            <thead>
+                                <tr className="bg-slate-950">
+                                    <th className="p-2 border border-slate-800"></th>
+                                    {zoneConfigs.map((z, i) => <th key={i} className="p-2 border border-slate-800 text-slate-500 font-black">{i+1}</th>)}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {distances.map((row, rIdx) => (
+                                    <tr key={rIdx}>
+                                        <th className="p-2 border border-slate-800 bg-slate-950 text-slate-500 font-black">{rIdx+1}</th>
+                                        {row.map((val, cIdx) => (
+                                            <td key={cIdx} className="p-0 border border-slate-800">
+                                                {rIdx === cIdx ? <div className="h-10 bg-slate-900/50" /> : <input type="number" value={val} onChange={e => handleDistanceChange(rIdx, cIdx, e.target.value)} className="w-full h-10 bg-transparent text-center font-mono text-cyan-400 outline-none focus:bg-indigo-600/10" />}
+                                            </td>
+                                        ))}
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </Card>
+                <Card>
+                    <CardTitle className="text-sm font-black uppercase tracking-widest">⛓️ Manual IMD Links</CardTitle>
+                    <div className="overflow-x-auto rounded-sm border border-slate-700 shadow-inner bg-black/20">
+                        <table className="w-full text-[10px] border-collapse text-center">
+                            <thead>
+                                <tr className="bg-slate-950">
+                                    <th className="p-2 border border-slate-800"></th>
+                                    {zoneConfigs.map((z, i) => <th key={i} className="p-2 border border-slate-800 text-slate-500 font-black">{i+1}</th>)}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {compatibilityMatrix.map((row, rIdx) => (
+                                    <tr key={rIdx}>
+                                        <th className="p-2 border border-slate-800 bg-slate-950 text-slate-500 font-black">{rIdx+1}</th>
+                                        {row.map((val, cIdx) => (
+                                            <td key={cIdx} className="p-1 border border-slate-800 text-center">
+                                                {rIdx === cIdx ? '—' : <input type="checkbox" checked={val} onChange={() => handleMatrixChange(rIdx, cIdx)} className="w-3 h-3 accent-indigo-500" />}
+                                            </td>
+                                        ))}
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </Card>
+            </div>
+            )}
+
+            <div className="space-y-4">
+                {(isLoading || results) && (
+                    <div className="bg-slate-800/80 border border-blue-500/20 rounded-md p-2 shadow-2xl animate-in fade-in slide-in-from-top-2 duration-300">
+                        <div className="flex justify-between items-center mb-2.5">
+                            <span className="text-[10px] font-black text-indigo-300 uppercase tracking-[0.2em]">
+                                {isLoading ? `Deep Search Trial ${Math.round(progress * 50)} / 50...` : 'Total Zonal Spectral Yield'}
+                            </span>
+                            <span className="text-xs font-bold text-white font-mono">
+                                {isLoading ? `${Math.round(progress * 100)}%` : `${totalFound} / ${totalRequested} Frequencies`}
+                            </span>
+                        </div>
+                        <div className="w-full bg-slate-950 h-3 rounded-full overflow-hidden border border-white/5 shadow-inner">
+                            <div 
+                                className="bg-gradient-to-r from-indigo-500 to-cyan-400 h-full transition-all duration-300 shadow-[0_0_15px_rgba(99,102,241,0.5)]" 
+                                style={{ width: `${Math.min(100, (isLoading ? progress : (totalFound / (totalRequested || 1))) * 100)}%` }}
+                            />
+                        </div>
+                        {isLoading && (
+                            <p className="mt-2 text-center text-[9px] text-slate-500 uppercase font-black tracking-widest animate-pulse">Running 50-Trial Spatially-Weighted Monte Carlo Simulation...</p>
+                        )}
+                    </div>
+                )}
+            </div>
+
+            {results && (
+                <Card className="!bg-slate-950 border-cyan-500/30">
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-2 mb-6">
+                        <div>
+                            <CardTitle className="!mb-0 text-cyan-400 uppercase tracking-widest text-sm font-black">Master Zonal Deployment Report</CardTitle>
+                            <p className="text-[10px] text-slate-500 uppercase mt-1">Status: Coordination Complete - Use padlocks to preserve frequencies</p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            <button onClick={() => handleGlobalLock(true)} className="px-3 py-1.5 rounded-sm bg-amber-500/20 text-amber-400 border border-amber-500/30 text-[10px] font-black uppercase hover:bg-amber-500 hover:text-white transition-all">🔒 Lock All Results</button>
+                            <button onClick={() => handleGlobalLock(false)} className="px-3 py-1.5 rounded-sm bg-slate-700 text-slate-200 border border-slate-600 text-[10px] font-black uppercase hover:bg-slate-600 transition-all">🔓 Unlock All Results</button>
+                            <button onClick={() => setShowTabulation(!showTabulation)} className={actionButton}>{showTabulation ? 'Hide Table' : '📊 View Ledger'}</button>
+                            <div className="relative">
+                                <button 
+                                    onClick={() => { setIsExportMenuOpen(!isExportMenuOpen); setIsWwbSubmenuOpen(false); }} 
+                                    className={`${primaryButton} flex items-center gap-2`}
+                                >
+                                    <span>📤</span> EXPORT PLAN
+                                    <span className={`transition-transform ${isExportMenuOpen ? 'rotate-180' : ''}`}>▼</span>
+                                </button>
+                                {isExportMenuOpen && (
+                                    <div className="absolute top-full right-0 mt-2 bg-slate-800 border border-indigo-500/40 rounded-md shadow-2xl z-[110] overflow-hidden min-w-[220px] animate-in fade-in slide-in-from-top-2 duration-200">
+                                        <div className="grid grid-cols-1 divide-y divide-white/5">
+                                            {/* WWB SMART EXPORT SUBMENU */}
+                                            <button onClick={() => setIsWwbSubmenuOpen(!isWwbSubmenuOpen)} className="w-full text-left p-3 hover:bg-indigo-600 transition-colors flex items-center justify-between bg-indigo-500/10">
+                                                <div className="flex flex-col">
+                                                    <span className="text-white font-bold text-[10px] uppercase tracking-wider">WWB Smart Export (.TXT)</span>
+                                                    <span className="text-[8px] text-indigo-300 font-black">Grouped by Hardware Group</span>
+                                                </div>
+                                                <span className={`text-xs transition-transform ${isWwbSubmenuOpen ? 'rotate-90' : ''}`}>▶</span>
+                                            </button>
+                                            {isWwbSubmenuOpen && (
+                                                <div className="bg-slate-950 border-l-2 border-indigo-500 py-1 animate-in slide-in-from-right-2 duration-200">
+                                                    <button onClick={() => handleWwbSmartExport()} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-[9px] font-bold text-slate-300 uppercase tracking-tighter">
+                                                        &bull; Export Full Site List
+                                                    </button>
+                                                    {uniqueWwbGroups.map(group => (
+                                                        <button 
+                                                            key={group.key}
+                                                            onClick={() => handleWwbSmartExport(group.key)}
+                                                            className="w-full text-left px-3 py-2 hover:bg-slate-800 text-[9px] font-bold text-indigo-400 uppercase tracking-tighter border-t border-white/5"
+                                                        >
+                                                            &bull; Export {group.name} - {group.count} CH
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            <button onClick={() => handleExport('pdf')} className="w-full text-left p-3 hover:bg-indigo-600 transition-colors flex items-center justify-between group">
+                                                <div className="flex flex-col">
+                                                    <span className="text-white font-bold text-[10px] uppercase tracking-wider">Plain PDF Document</span>
+                                                </div>
+                                                <span className="text-sm">📄</span>
+                                            </button>
+                                            <button onClick={() => setIsPreviewModalOpen(true)} className="w-full text-left p-3 hover:bg-indigo-600 transition-colors flex items-center justify-between group">
+                                                <div className="flex flex-col">
+                                                    <span className="text-white font-bold text-[10px] uppercase tracking-wider">Company PDF Report</span>
+                                                </div>
+                                                <span className="text-sm">🏢</span>
+                                            </button>
+                                            <button onClick={() => {
+                                                if (!pdfTemplate) {
+                                                    templateInputRef.current?.click();
+                                                } else {
+                                                    handleExport('pdf-template');
+                                                }
+                                            }} className="w-full text-left p-3 hover:bg-purple-600 transition-colors flex items-center justify-between group">
+                                                <div className="flex flex-col">
+                                                    <span className="text-white font-bold text-[10px] uppercase tracking-wider">Export to Company Template</span>
+                                                    <span className="text-[8px] text-purple-300 font-black">{pdfTemplate ? `Template: ${pdfTemplate.name} (Click to export)` : 'Requires blank PDF template upload'}</span>
+                                                </div>
+                                                <span className="text-sm">🏢</span>
+                                            </button>
+                                            {pdfTemplate && (
+                                                <button onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setPdfTemplate(null);
+                                                    if (templateInputRef.current) templateInputRef.current.value = '';
+                                                }} className="w-full text-left px-3 py-2 bg-slate-900 hover:bg-red-900/50 transition-colors flex items-center justify-between">
+                                                    <span className="text-red-400 font-bold text-[9px] uppercase tracking-wider">Clear Template</span>
+                                                    <span className="text-xs">🗑️</span>
+                                                </button>
+                                            )}
+                                            <input 
+                                                type="file" 
+                                                accept="application/pdf" 
+                                                ref={templateInputRef} 
+                                                className="hidden" 
+                                                onChange={(e) => {
+                                                    if (e.target.files && e.target.files[0]) {
+                                                        const file = e.target.files[0];
+                                                        setPdfTemplate(file);
+                                                        handleExport('pdf-template', file);
+                                                    }
+                                                }} 
+                                            />
+                                            <button onClick={() => handleExport('xls')} className="w-full text-left p-3 hover:bg-emerald-600 transition-colors flex items-center justify-between group">
+                                                <div className="flex flex-col">
+                                                    <span className="text-white font-bold text-[10px] uppercase tracking-wider">Excel (.XLS)</span>
+                                                </div>
+                                                <span className="text-sm">📊</span>
+                                            </button>
+                                            <button onClick={() => handleExport('csv')} className="w-full text-left p-3 hover:bg-blue-600 transition-colors flex items-center justify-between group">
+                                                <div className="flex flex-col">
+                                                    <span className="text-white font-bold text-[10px] uppercase tracking-wider">CSV File</span>
+                                                </div>
+                                                <span className="text-sm">📑</span>
+                                            </button>
+                                            <button onClick={() => handleExport('txt')} className="w-full text-left p-3 hover:bg-slate-600 transition-colors flex items-center justify-between group">
+                                                <div className="flex flex-col">
+                                                    <span className="text-white font-bold text-[10px] uppercase tracking-wider">Text (.TXT)</span>
+                                                </div>
+                                                <span className="text-sm">📄</span>
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                            <button onClick={() => setResults(null)} className={secondaryButton}>Clear</button>
+                        </div>
+                    </div>
+                    
+                    {showTabulation && (
+                        <div className="overflow-y-auto max-h-[400px] rounded-md border border-white/10 mb-6 custom-scrollbar">
+                            <table className="w-full text-left border-collapse text-[11px]">
+                                <thead className="bg-slate-900 sticky top-0 z-10 shadow-sm">
+                                    <tr className="text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-white/10">
+                                        <th className="p-2 cursor-pointer hover:bg-white/5" onClick={() => handleSort('freq')}>Frequency <SortArrow field="freq" /></th>
+                                        <th className="p-2 cursor-pointer hover:bg-white/5" onClick={() => handleSort('label')}>Designation <SortArrow field="label" /></th>
+                                        <th className="p-2 cursor-pointer hover:bg-white/5" onClick={() => handleSort('zone')}>Location <SortArrow field="zone" /></th>
+                                        <th className="p-2 cursor-pointer hover:bg-white/5" onClick={() => handleSort('modelName')}>Hardware <SortArrow field="modelName" /></th>
+                                        <th className="p-2 text-center">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-white/5">
+                                    {tabulatedData.map((row) => (
+                                        <tr key={row.id} className="hover:bg-indigo-500/5 transition-colors group">
+                                            <td className="p-2 tabular-nums text-cyan-400 font-bold">{row.freq.toFixed(3)}</td>
+                                            <td className="p-2 text-white font-medium">{row.label}</td>
+                                            <td className="p-2 text-indigo-300 font-bold uppercase tracking-tighter">{row.zone}</td>
+                                            <td className="p-2 text-slate-400">{row.modelName} <span className="text-[10px] opacity-50">[{row.bandName}]</span></td>
+                                            <td className="p-2 text-center text-sm">{row.locked ? '🔒' : '🔓'}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+                        {results.zones.map((zone, zIdx) => (
+                            <div key={zIdx} className="bg-slate-900/40 rounded-md border border-slate-700/80 p-2 shadow-sm border border-slate-700/50">
+                                <div className="flex justify-between items-center mb-3 border-b border-white/10 pb-2">
+                                    <h4 className="text-xs font-black text-indigo-400 uppercase">
+                                        {zone.name} <span className="text-slate-500 ml-1">({zone.frequencies.length})</span>
+                                    </h4>
+                                    <div className="flex gap-2">
+                                        <button onClick={() => handleZoneLock(zIdx, true)} className="text-[9px] font-bold text-slate-500 hover:text-white" title="Lock Zone">🔒</button>
+                                        <button onClick={() => handleZoneLock(zIdx, false)} className="text-[9px] font-bold text-slate-500 hover:text-white" title="Unlock Zone">🔓</button>
+                                    </div>
+                                </div>
+                                <div className="space-y-1.5">
+                                    {zone.frequencies.map(f => (
+                                        <div key={f.id} className="flex items-center justify-between gap-2 p-1.5 bg-black/20 rounded-sm border border-slate-700/50 group hover:border-indigo-500/30 transition-all">
+                                            <div className="flex items-center gap-2 flex-1 overflow-hidden">
+                                                <button onClick={() => handleIndividualLock(f.id)} className={`text-[10px] flex-shrink-0 ${f.locked ? 'text-amber-500' : 'text-slate-600'}`}>
+                                                    {f.locked ? '🔒' : '🔓'}
+                                                </button>
+                                                <div className="flex items-center gap-1 flex-1 min-w-0">
+                                                    <input 
+                                                        type="number" step="0.001" value={f.value.toFixed(3)} 
+                                                        onChange={e => handleFrequencyValueChange(f.id, e.target.value)}
+                                                        className="bg-transparent text-[11px] font-mono font-bold text-white w-20 outline-none flex-shrink-0" 
+                                                    />
+                                                    <div className="flex gap-0.5">
+                                                        <button onClick={() => handleFrequencyStep(f.id, 'down')} className="text-[9px] bg-slate-700 text-white rounded px-1 hover:bg-indigo-600">-</button>
+                                                        <button onClick={() => handleFrequencyStep(f.id, 'up')} className="text-[9px] bg-slate-700 text-white rounded px-1 hover:bg-indigo-600">+</button>
+                                                    </div>
+                                                </div>
+                                                <span className="text-[10px] text-slate-500 truncate" title={f.label}>{f.label}</span>
+                                            </div>
+                                            <button onClick={() => handleRemoveFrequency(f.id)} className="text-rose-500/30 hover:text-rose-500 opacity-100 transition-all flex-shrink-0 px-1">&times;</button>
+                                        </div>
+                                    ))}
+                                    <button onClick={() => handleAddManualFrequency(zIdx)} className="w-full mt-2 py-1.5 border border-dashed border-slate-700 rounded-sm text-[9px] font-black text-slate-500 hover:border-indigo-500/50 hover:text-indigo-400 transition-all uppercase tracking-widest">+ Add Channel</button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </Card>
+            )}
+            
+            <PdfPreviewModal 
+                isOpen={isPreviewModalOpen}
+                onClose={() => setIsPreviewModalOpen(false)}
+                generatePdf={generatePdfForPreview}
+                filename={`multizone_rf_plan_${new Date().toISOString().slice(0, 10)}`}
+            />
+        </div>
+    );
+};
+
+export default React.memo(MultiZoneCoordinationTab);
