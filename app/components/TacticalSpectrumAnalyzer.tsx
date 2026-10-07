@@ -14,6 +14,9 @@ export interface SpectrumCarrier {
   freq: number;
   label: string;
   type: 'BASE_TX' | 'PORT_TX' | 'IFB' | 'WALKIE';
+  bw?: number | string;
+  txBw?: number;
+  rxBw?: number;
   isKeyed?: boolean;
   isGhost?: boolean;
   hasClash?: boolean;
@@ -130,9 +133,9 @@ export function useTacticalSpectrumAnalyzer({
   };
 
   const [canvasWidth, setCanvasWidth] = useState<number>(330);
-  const CANVAS_HEIGHT = 175;
-  const TOP_MARGIN = 20;
-  const BOTTOM_MARGIN = 24;
+  const CANVAS_HEIGHT = 200;
+  const TOP_MARGIN = 22;
+  const BOTTOM_MARGIN = 26;
   const PLOT_HEIGHT = CANVAS_HEIGHT - TOP_MARGIN - BOTTOM_MARGIN;
   const NOISE_FLOOR_DBM = -100;
   const REF_LEVEL_DBM = 0;
@@ -632,6 +635,8 @@ export const TacticalSpectrumAnalyzerScope: React.FC<{ state: TacticalSpectrumAn
           {/* 10x10 Calibrated Graticule Grid */}
           {dbmLevels.map((dbm) => {
             const y = dbmToY(dbm);
+            const labelY = dbm === 0 ? y + 8 : (dbm === -100 ? y - 3 : y - 2);
+            const textLabel = dbm === 0 ? '0 dBm' : `${dbm}`;
             return (
               <G key={`dbm_${dbm}`}>
                 <Line
@@ -644,14 +649,15 @@ export const TacticalSpectrumAnalyzerScope: React.FC<{ state: TacticalSpectrumAn
                   strokeDasharray={dbm === 0 || dbm === -100 ? 'none' : '2, 4'}
                 />
                 <SvgText
-                  x={canvasWidth - 4}
-                  y={y - 2}
-                  fill="#1e4e6e"
+                  x={canvasWidth - 5}
+                  y={labelY}
+                  fill="#3b6e8c"
                   fontSize="7.5"
+                  fontWeight="bold"
                   fontFamily={Platform.OS === 'ios' ? 'Courier' : 'monospace'}
                   textAnchor="end"
                 >
-                  {dbm} dBm
+                  {textLabel}
                 </SvgText>
               </G>
             );
@@ -724,7 +730,7 @@ export const TacticalSpectrumAnalyzerScope: React.FC<{ state: TacticalSpectrumAn
           {/* Active Carriers & Standby Ghosts */}
           {carriers.map((car, idx) => {
             const x = freqToX(car.freq);
-            if (x < -20 || x > canvasWidth + 20) return null;
+            if (x < -40 || x > canvasWidth + 40) return null;
             const isGhost = !!car.isGhost;
             const isKeyed = !!car.isKeyed;
             const dbm = car.powerDbm ?? (isGhost ? -52 : (car.type === 'BASE_TX' ? -10 : -18));
@@ -734,7 +740,14 @@ export const TacticalSpectrumAnalyzerScope: React.FC<{ state: TacticalSpectrumAn
             const hitImd = imds.find(imd => Math.abs(imd.freq - car.freq) <= 0.005);
             const hasClash = !!(car.hasClash || hitImd);
 
-            const halfBwPx = ((rbwKhz / 1000) / span) * canvasWidth;
+            // Exact channel bandwidth in MHz (12.5 kHz = 0.0125 MHz, 25 kHz = 0.025 MHz, 50 kHz = 0.050 MHz)
+            const carBwMhz = (typeof car.bw === 'number' && car.bw > 0)
+              ? (car.bw > 1 ? car.bw / 1000 : car.bw)
+              : (typeof car.bw === 'string' && parseFloat(car.bw) > 0)
+                ? (parseFloat(car.bw) > 1 ? parseFloat(car.bw) / 1000 : parseFloat(car.bw))
+                : (typeof car.txBw === 'number' && car.txBw > 0)
+                  ? (car.txBw > 1 ? car.txBw / 1000 : car.txBw)
+                  : 0.0125;
 
             let strokeColor = '#facc15';
             if (isRx) strokeColor = isKeyed ? '#22c55e' : (isGhost ? '#38bdf8' : '#38bdf8');
@@ -743,11 +756,13 @@ export const TacticalSpectrumAnalyzerScope: React.FC<{ state: TacticalSpectrumAn
             if (car.locked) strokeColor = '#4ade80';
             if (hasClash) strokeColor = '#ef4444';
 
-            const leftX = x - Math.max(4, halfBwPx);
-            const rightX = x + Math.max(4, halfBwPx);
+            // Exact physical spectrum footprint on the canvas graticule
+            const leftX = freqToX(car.freq - carBwMhz / 2);
+            const rightX = freqToX(car.freq + carBwMhz / 2);
+            const halfBwPx = (rightX - leftX) / 2;
             const baseY = TOP_MARGIN + PLOT_HEIGHT;
 
-            const pathData = `M ${leftX - 6} ${baseY} Q ${leftX} ${baseY} ${x - 2} ${peakY + 2} L ${x} ${peakY} L ${x + 2} ${peakY + 2} Q ${rightX} ${baseY} ${rightX + 6} ${baseY} Z`;
+            const pathData = `M ${leftX} ${baseY} Q ${leftX + halfBwPx * 0.45} ${baseY} ${x - Math.max(1, halfBwPx * 0.12)} ${peakY + 2} L ${x} ${peakY} L ${x + Math.max(1, halfBwPx * 0.12)} ${peakY + 2} Q ${rightX - halfBwPx * 0.45} ${baseY} ${rightX} ${baseY} Z`;
 
             if (isGhost) {
               return (
@@ -759,6 +774,11 @@ export const TacticalSpectrumAnalyzerScope: React.FC<{ state: TacticalSpectrumAn
                     strokeWidth={hasClash ? '2.5' : '1.2'}
                     strokeDasharray={hasClash ? 'none' : '3, 3'}
                   />
+                  {/* Channel bandwidth footprint baseline bar */}
+                  <Line x1={leftX} y1={baseY - 1} x2={rightX} y2={baseY - 1} stroke={strokeColor} strokeWidth="2" opacity="0.6" strokeDasharray="2, 2" />
+                  <Line x1={leftX} y1={baseY - 3} x2={leftX} y2={baseY + 1} stroke={strokeColor} strokeWidth="1" opacity="0.6" />
+                  <Line x1={rightX} y1={baseY - 3} x2={rightX} y2={baseY + 1} stroke={strokeColor} strokeWidth="1" opacity="0.6" />
+
                   <Circle
                     cx={x}
                     cy={peakY}
@@ -777,8 +797,8 @@ export const TacticalSpectrumAnalyzerScope: React.FC<{ state: TacticalSpectrumAn
                     textAnchor="middle"
                     opacity="0.95"
                   >
-                    {hasClash ? '[! CLASH] ' : ' '}
-                    {car.label}
+                    {hasClash ? '⚠️ ' : ''}
+                    {car.label || (idx + 1)}
                   </SvgText>
                 </G>
               );
@@ -800,6 +820,11 @@ export const TacticalSpectrumAnalyzerScope: React.FC<{ state: TacticalSpectrumAn
                   stroke={strokeColor}
                   strokeWidth={hasClash ? '3' : (isKeyed ? '2.2' : '1.8')}
                 />
+                {/* Channel bandwidth footprint baseline bar */}
+                <Line x1={leftX} y1={baseY - 1} x2={rightX} y2={baseY - 1} stroke={strokeColor} strokeWidth="2.5" opacity="0.85" />
+                <Line x1={leftX} y1={baseY - 4} x2={leftX} y2={baseY + 1} stroke={strokeColor} strokeWidth="1.2" opacity="0.85" />
+                <Line x1={rightX} y1={baseY - 4} x2={rightX} y2={baseY + 1} stroke={strokeColor} strokeWidth="1.2" opacity="0.85" />
+
                 <Circle
                   cx={x}
                   cy={peakY}
@@ -817,8 +842,8 @@ export const TacticalSpectrumAnalyzerScope: React.FC<{ state: TacticalSpectrumAn
                   fontFamily={Platform.OS === 'ios' ? 'Courier' : 'monospace'}
                   textAnchor="middle"
                 >
-                  {hasClash ? '[! CLASH] ' : (isKeyed ? ' ' : '')}
-                  {car.label}
+                  {hasClash ? '⚠️ ' : ''}
+                  {car.label || (idx + 1)}
                 </SvgText>
               </G>
             );

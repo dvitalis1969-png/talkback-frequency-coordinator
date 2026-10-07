@@ -2978,7 +2978,8 @@ Press **'w'** in your terminal to open in web browser, or scan the QR code with 
 
   // Dedicated Interactive Browser Code Viewer for index.tsx
   app.get(["/view-index", "/code-viewer", "/index-viewer", "/view-code", "/code", "/source"], (req, res) => {
-    const indexPath = path.join(process.cwd(), "index.tsx");
+    const appIndexPath = path.join(process.cwd(), "app", "index.tsx");
+    const indexPath = fs.existsSync(appIndexPath) ? appIndexPath : path.join(process.cwd(), "index.tsx");
     let content = "";
     let stats = { size: 0, lines: 0 };
     if (fs.existsSync(indexPath)) {

@@ -13,10 +13,21 @@ import {
   Share, 
   Alert, 
   Modal,
-  Linking
+  Linking,
+  LogBox
 } from 'react-native';
 import Svg, { Line, Rect, Text as SvgText, G, Circle, Path, Polygon } from 'react-native-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// Protect against LogBox overlay formatting crashes in Expo / Dev client
+if (typeof LogBox !== 'undefined' && LogBox?.ignoreLogs) {
+  try {
+    LogBox.ignoreLogs([
+      'An error was thrown when attempting to render log messages via logbox',
+      'Text strings must be rendered within a <Text> component'
+    ]);
+  } catch (e) {}
+}
 // ================= VECTOR HARDWARE PADLOCK ICON =================
 export const HardwarePadlockIcon: React.FC<{ locked: boolean; size?: number }> = ({ locked, size = 16 }) => {
   if (locked) {
@@ -375,6 +386,16 @@ interface Props {
   onClose?: () => void;
 }
 
+let cachedDedicatedCarriers: CustomCarrierInput[] | null = null;
+const DEDICATED_CARRIERS_STORAGE_KEY = 'rf_dedicated_spectrum_carriers_v1';
+
+const DEFAULT_SPECTRUM_CARRIERS: CustomCarrierInput[] = [
+  { id: 'pair_1', tx: 455.03125, rx: 468.05625, label: 'Base 1 / Crew 1', type: 'DUPLEX', txBw: 0.0125, rxBw: 0.0125, active: true, locked: false },
+  { id: 'pair_2', tx: 455.19375, rx: 468.21875, label: 'Base 2 / Crew 2', type: 'DUPLEX', txBw: 0.0125, rxBw: 0.0125, active: true, locked: false },
+  { id: 'pair_3', tx: 455.35625, rx: 468.38125, label: 'Base 3 / Crew 3', type: 'DUPLEX', txBw: 0.0125, rxBw: 0.0125, active: true, locked: false },
+  { id: 'ifb_1', tx: 455.60000, rx: 0, label: 'Floor IFB Feed', type: 'BASE_TX', txBw: 0.0125, rxBw: 0.0125, active: true, locked: false }
+];
+
 export const DedicatedSpectrumAnalyzerScreen: React.FC<Props> = ({
   onApplyToPlan,
   onClose
@@ -383,9 +404,54 @@ export const DedicatedSpectrumAnalyzerScreen: React.FC<Props> = ({
   const isLandscape = windowWidth > windowHeight;
 
   // ----------------------------------------------------
-  // 1. CARRIER POOL (User entered or preset)
+  // 1. CARRIER POOL (User entered or preset - Persistent across screen navigation)
   // ----------------------------------------------------
-  const [carriers, setCarriers] = useState<CustomCarrierInput[]>([]);
+  const [carriers, setCarriers] = useState<CustomCarrierInput[]>(() => {
+    if (cachedDedicatedCarriers && Array.isArray(cachedDedicatedCarriers)) {
+      return cachedDedicatedCarriers;
+    }
+    if (typeof window !== 'undefined' && window.localStorage) {
+      try {
+        const stored = window.localStorage.getItem(DEDICATED_CARRIERS_STORAGE_KEY);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed)) {
+            cachedDedicatedCarriers = parsed;
+            return parsed;
+          }
+        }
+      } catch (e) {}
+    }
+    cachedDedicatedCarriers = DEFAULT_SPECTRUM_CARRIERS;
+    return DEFAULT_SPECTRUM_CARRIERS;
+  });
+
+  // Hydrate from persistent storage on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(DEDICATED_CARRIERS_STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            cachedDedicatedCarriers = parsed;
+            setCarriers(parsed);
+          }
+        }
+      } catch (err) {}
+    })();
+  }, []);
+
+  // Save to persistent storage and module cache whenever carriers change
+  useEffect(() => {
+    cachedDedicatedCarriers = carriers;
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem(DEDICATED_CARRIERS_STORAGE_KEY, JSON.stringify(carriers));
+      }
+      AsyncStorage.setItem(DEDICATED_CARRIERS_STORAGE_KEY, JSON.stringify(carriers)).catch(() => {});
+    } catch (e) {}
+  }, [carriers]);
 
   // Permanent Channel Number Extractors & Generators (Never change on toggle or delete)
   const getCarrierChannelNumber = (c: CustomCarrierInput, fallbackIndex: number = 0): number => {
@@ -512,15 +578,31 @@ export const DedicatedSpectrumAnalyzerScreen: React.FC<Props> = ({
 
   // Complete Reset / Clear all carriers from the spectrum analyzer
   const handleClearAllCarriers = () => {
-    if (carriers.length === 0) {
-      setStatusMsg('ℹ️ Carrier ledger is already empty.');
-      return;
-    }
     setCarriers([]);
+    cachedDedicatedCarriers = [];
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem(DEDICATED_CARRIERS_STORAGE_KEY, JSON.stringify([]));
+      }
+      AsyncStorage.setItem(DEDICATED_CARRIERS_STORAGE_KEY, JSON.stringify([])).catch(() => {});
+    } catch (e) {}
     setMarker1(null);
     setMarker2(null);
     setBatchInputText('');
-    setStatusMsg('✓ Cleared all spectrum carriers. Ready for new entries or presets.');
+    setStatusMsg('✓ Cleared all spectrum carriers from ledger.');
+  };
+
+  // Cycle channel bandwidth: 12.5k -> 25k -> 50k -> 12.5k
+  const handleCycleCarrierBw = (id: string) => {
+    setCarriers(prev => prev.map(c => {
+      if (c.id !== id) return c;
+      const curKhz = (c.txBw > 1 ? c.txBw : (c.txBw || 0.0125) * 1000);
+      let nextMhz = 0.0125;
+      if (curKhz < 18) nextMhz = 0.025; // 12.5k -> 25k
+      else if (curKhz < 35) nextMhz = 0.050; // 25k -> 50k
+      else nextMhz = 0.0125; // 50k -> 12.5k
+      return { ...c, txBw: nextMhz, rxBw: nextMhz };
+    }));
   };
 
   const loadBespokePresets = async () => {
@@ -1599,17 +1681,42 @@ export const DedicatedSpectrumAnalyzerScreen: React.FC<Props> = ({
       const rxPeakY = dbmToY(-20);
       const chNum = getCarrierChannelNumber(c, idx);
 
+      // Exact channel bandwidth in MHz (12.5 kHz = 0.0125 MHz, 25 kHz = 0.025 MHz, 50 kHz = 0.050 MHz)
+      const txBwMhz = (typeof c.txBw === 'number' && c.txBw > 0)
+        ? (c.txBw > 1 ? c.txBw / 1000 : c.txBw)
+        : 0.0125;
+      const rxBwMhz = (typeof c.rxBw === 'number' && c.rxBw > 0)
+        ? (c.rxBw > 1 ? c.rxBw / 1000 : c.rxBw)
+        : txBwMhz;
+
+      // Exact physical spectrum footprint on the canvas graticule
+      const txLeftX = freqToX(c.tx - txBwMhz / 2);
+      const txRightX = freqToX(c.tx + txBwMhz / 2);
+      const txHalfBwPx = (txRightX - txLeftX) / 2;
+
+      const rxLeftX = xRx !== null ? freqToX(c.rx - rxBwMhz / 2) : 0;
+      const rxRightX = xRx !== null ? freqToX(c.rx + rxBwMhz / 2) : 0;
+      const rxHalfBwPx = (rxRightX - rxLeftX) / 2;
+
+      const txPath = `M ${txLeftX} ${baseY} Q ${txLeftX + txHalfBwPx * 0.45} ${baseY} ${xTx - Math.max(1, txHalfBwPx * 0.12)} ${txPeakY + 2} L ${xTx} ${txPeakY} L ${xTx + Math.max(1, txHalfBwPx * 0.12)} ${txPeakY + 2} Q ${txRightX - txHalfBwPx * 0.45} ${baseY} ${txRightX} ${baseY} Z`;
+      const rxPath = `M ${rxLeftX} ${baseY} Q ${rxLeftX + rxHalfBwPx * 0.45} ${baseY} ${(xRx || 0) - Math.max(1, rxHalfBwPx * 0.12)} ${rxPeakY + 2} L ${xRx || 0} ${rxPeakY} L ${(xRx || 0) + Math.max(1, rxHalfBwPx * 0.12)} ${rxPeakY + 2} Q ${rxRightX - rxHalfBwPx * 0.45} ${baseY} ${rxRightX} ${baseY} Z`;
+
       return (
         <G key={`carrier_${c.id}`}>
           {/* TX Carrier Peak */}
-          {xTx >= -20 && xTx <= canvasWidth + 20 && (
+          {xTx >= -40 && xTx <= canvasWidth + 40 && (
             <G>
               {fillSpikes && (
                 <Path
-                  d={`M ${xTx - 8} ${baseY} Q ${xTx - 3} ${baseY} ${xTx - 1} ${txPeakY + 2} L ${xTx} ${txPeakY} L ${xTx + 1} ${txPeakY + 2} Q ${xTx + 3} ${baseY} ${xTx + 8} ${baseY} Z`}
+                  d={txPath}
                   fill={hasTxClash ? 'rgba(239, 68, 68, 0.4)' : 'rgba(250, 204, 21, 0.3)'}
                 />
               )}
+              {/* Channel bandwidth footprint baseline bar */}
+              <Line x1={txLeftX} y1={baseY - 1} x2={txRightX} y2={baseY - 1} stroke={hasTxClash ? '#ef4444' : '#facc15'} strokeWidth="2.5" opacity="0.8" />
+              <Line x1={txLeftX} y1={baseY - 4} x2={txLeftX} y2={baseY + 1} stroke={hasTxClash ? '#ef4444' : '#facc15'} strokeWidth="1.2" opacity="0.8" />
+              <Line x1={txRightX} y1={baseY - 4} x2={txRightX} y2={baseY + 1} stroke={hasTxClash ? '#ef4444' : '#facc15'} strokeWidth="1.2" opacity="0.8" />
+
               <Line x1={xTx} y1={txPeakY} x2={xTx} y2={baseY} stroke={hasTxClash ? '#ef4444' : '#facc15'} strokeWidth="2" />
               <Circle cx={xTx} cy={txPeakY} r={3} fill={hasTxClash ? '#ef4444' : '#facc15'} />
               <SvgText x={xTx} y={txPeakY - 4} fill={hasTxClash ? '#fca5a5' : '#fde047'} fontSize="7.5" fontWeight="bold" textAnchor="middle">
@@ -1619,14 +1726,19 @@ export const DedicatedSpectrumAnalyzerScreen: React.FC<Props> = ({
           )}
 
           {/* RX Carrier Peak (Duplex) */}
-          {xRx !== null && xRx >= -20 && xRx <= canvasWidth + 20 && (
+          {xRx !== null && xRx >= -40 && xRx <= canvasWidth + 40 && (
             <G>
               {fillSpikes && (
                 <Path
-                  d={`M ${xRx - 8} ${baseY} Q ${xRx - 3} ${baseY} ${xRx - 1} ${rxPeakY + 2} L ${xRx} ${rxPeakY} L ${xRx + 1} ${rxPeakY + 2} Q ${xRx + 3} ${baseY} ${xRx + 8} ${baseY} Z`}
+                  d={rxPath}
                   fill={hasRxClash ? 'rgba(239, 68, 68, 0.4)' : 'rgba(56, 189, 248, 0.3)'}
                 />
               )}
+              {/* Channel bandwidth footprint baseline bar */}
+              <Line x1={rxLeftX} y1={baseY - 1} x2={rxRightX} y2={baseY - 1} stroke={hasRxClash ? '#ef4444' : '#38bdf8'} strokeWidth="2.5" opacity="0.8" />
+              <Line x1={rxLeftX} y1={baseY - 4} x2={rxLeftX} y2={baseY + 1} stroke={hasRxClash ? '#ef4444' : '#38bdf8'} strokeWidth="1.2" opacity="0.8" />
+              <Line x1={rxRightX} y1={baseY - 4} x2={rxRightX} y2={baseY + 1} stroke={hasRxClash ? '#ef4444' : '#38bdf8'} strokeWidth="1.2" opacity="0.8" />
+
               <Line x1={xRx} y1={rxPeakY} x2={xRx} y2={baseY} stroke={hasRxClash ? '#ef4444' : '#38bdf8'} strokeWidth="2" />
               <Circle cx={xRx} cy={rxPeakY} r={3} fill={hasRxClash ? '#ef4444' : '#38bdf8'} />
               <SvgText x={xRx} y={rxPeakY - 4} fill={hasRxClash ? '#fca5a5' : '#7dd3fc'} fontSize="7.5" fontWeight="bold" textAnchor="middle">
@@ -1696,12 +1808,32 @@ export const DedicatedSpectrumAnalyzerScreen: React.FC<Props> = ({
                 {/* Grid Lines */}
                 {showGrid && (
                   <>
-                    {[-100, -80, -60, -40, -20, 0].map(dbm => {
+                    {[0, -20, -40, -60, -80, -100].map(dbm => {
                       const y = dbmToY(dbm);
+                      const labelY = dbm === 0 ? y + 8 : (dbm === -100 ? y - 3 : y - 2);
+                      const textLabel = dbm === 0 ? '0 dBm' : `${dbm}`;
                       return (
                         <G key={`g_dbm_${dbm}`}>
-                          <Line x1="0" y1={y} x2={canvasWidth} y2={y} stroke="#0d2238" strokeWidth="1" strokeDasharray="2, 4" />
-                          <SvgText x={canvasWidth - 4} y={y - 2} fill="#1e4e6e" fontSize="7.5" textAnchor="end">{dbm} dBm</SvgText>
+                          <Line
+                            x1="0"
+                            y1={y}
+                            x2={canvasWidth}
+                            y2={y}
+                            stroke={dbm === 0 ? '#1e3a5f' : '#0d2238'}
+                            strokeWidth="1"
+                            strokeDasharray={dbm === 0 || dbm === -100 ? 'none' : '2, 4'}
+                          />
+                          <SvgText
+                            x={canvasWidth - 5}
+                            y={labelY}
+                            fill="#3b6e8c"
+                            fontSize="7.5"
+                            fontWeight="bold"
+                            fontFamily={Platform.OS === 'ios' ? 'Courier' : 'monospace'}
+                            textAnchor="end"
+                          >
+                            {textLabel}
+                          </SvgText>
                         </G>
                       );
                     })}
@@ -2127,12 +2259,32 @@ export const DedicatedSpectrumAnalyzerScreen: React.FC<Props> = ({
                 {/* Grid Lines */}
                 {showGrid && (
                   <>
-                    {[-100, -80, -60, -40, -20, 0].map(dbm => {
+                    {[0, -20, -40, -60, -80, -100].map(dbm => {
                       const y = dbmToY(dbm);
+                      const labelY = dbm === 0 ? y + 8 : (dbm === -100 ? y - 3 : y - 2);
+                      const textLabel = dbm === 0 ? '0 dBm' : `${dbm}`;
                       return (
                         <G key={`g_dbm_${dbm}`}>
-                          <Line x1="0" y1={y} x2={canvasWidth} y2={y} stroke="#0d2238" strokeWidth="1" strokeDasharray="2, 4" />
-                          <SvgText x={canvasWidth - 4} y={y - 2} fill="#1e4e6e" fontSize="7.5" textAnchor="end">{dbm} dBm</SvgText>
+                          <Line
+                            x1="0"
+                            y1={y}
+                            x2={canvasWidth}
+                            y2={y}
+                            stroke={dbm === 0 ? '#1e3a5f' : '#0d2238'}
+                            strokeWidth="1"
+                            strokeDasharray={dbm === 0 || dbm === -100 ? 'none' : '2, 4'}
+                          />
+                          <SvgText
+                            x={canvasWidth - 5}
+                            y={labelY}
+                            fill="#3b6e8c"
+                            fontSize="7.5"
+                            fontWeight="bold"
+                            fontFamily={Platform.OS === 'ios' ? 'Courier' : 'monospace'}
+                            textAnchor="end"
+                          >
+                            {textLabel}
+                          </SvgText>
                         </G>
                       );
                     })}
@@ -3214,37 +3366,63 @@ export const DedicatedSpectrumAnalyzerScreen: React.FC<Props> = ({
         <View style={screenStyles.card}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
             <Text style={screenStyles.cardTitle}>CHANNEL LEDGER &amp; RASTER NUDGE</Text>
-            {/* Step Size Selector */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-              <Text style={{ color: '#94a3b8', fontSize: 8, fontWeight: 'bold' }}>STEP:</Text>
-              {[
-                { label: '6.25k', khz: 6.25 },
-                { label: '12.5k', khz: 12.5 },
-                { label: '25k', khz: 25.0 },
-                { label: '50k', khz: 50.0 },
-                { label: '100k', khz: 100.0 }
-              ].map(opt => (
-                <TouchableOpacity
-                  key={`ledger_step_${opt.khz}`}
-                  style={[
-                    screenStyles.stepPill,
-                    ledgerStepKhz === opt.khz && screenStyles.stepPillActive
-                  ]}
-                  onPress={() => setLedgerStepKhz(opt.khz)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[
-                    screenStyles.stepPillText,
-                    ledgerStepKhz === opt.khz && screenStyles.stepPillTextActive
-                  ]}>
-                    {opt.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+            
+            {/* Top Right Controls: Step Size Selector + Clear All Button */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              {/* Step Size Selector */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                <Text style={{ color: '#94a3b8', fontSize: 8, fontWeight: 'bold' }}>STEP:</Text>
+                {[
+                  { label: '6.25k', khz: 6.25 },
+                  { label: '12.5k', khz: 12.5 },
+                  { label: '25k', khz: 25.0 },
+                  { label: '50k', khz: 50.0 },
+                  { label: '100k', khz: 100.0 }
+                ].map(opt => (
+                  <TouchableOpacity
+                    key={`ledger_step_${opt.khz}`}
+                    style={[
+                      screenStyles.stepPill,
+                      ledgerStepKhz === opt.khz && screenStyles.stepPillActive
+                    ]}
+                    onPress={() => setLedgerStepKhz(opt.khz)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[
+                      screenStyles.stepPillText,
+                      ledgerStepKhz === opt.khz && screenStyles.stepPillTextActive
+                    ]}>
+                      {opt.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {/* Clear All Button */}
+              <TouchableOpacity
+                style={screenStyles.clearAllBtn}
+                onPress={handleClearAllCarriers}
+                activeOpacity={0.7}
+              >
+                <Text style={screenStyles.clearAllBtnText}>Clear All</Text>
+              </TouchableOpacity>
             </View>
           </View>
 
-          <View style={{ marginTop: 4, gap: 5 }}>
+          {/* Header duplicating Tactical Spectrum Analyzer: PWR, #, LOCK, TYPE, BASE TX, SWAP, PORT TX, BW, DEL */}
+          <View style={screenStyles.ledgerHeaderRow}>
+            <Text style={[screenStyles.colHeader, { width: 20, textAlign: 'center' }]}>PWR</Text>
+            <Text style={[screenStyles.colHeader, { width: 16, textAlign: 'center' }]}>#</Text>
+            <View style={{ width: 16 }} />
+            <Text style={[screenStyles.colHeader, { width: 24, textAlign: 'center' }]}>TYPE</Text>
+            <Text style={[screenStyles.colHeader, { flex: 1, textAlign: 'center' }]}>BASE TX</Text>
+            <View style={{ width: 16 }} />
+            <Text style={[screenStyles.colHeader, { flex: 1, textAlign: 'center' }]}>PORT TX</Text>
+            <Text style={[screenStyles.colHeader, { width: 36, textAlign: 'center' }]}>BW</Text>
+            <Text style={[screenStyles.colHeader, { width: 20, textAlign: 'center' }]}>DEL</Text>
+          </View>
+
+          <View style={{ marginTop: 2, gap: 5 }}>
             {carriers.length === 0 ? (
               <View style={{ paddingVertical: 18, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#070d18', borderRadius: 6, borderWidth: 1, borderColor: '#1e293b', borderStyle: 'dashed' }}>
                 <Text style={{ color: '#94a3b8', fontSize: 11, fontWeight: 'bold', marginBottom: 4 }}>NO FREQUENCIES IN SPECTRUM POOL</Text>
@@ -3252,11 +3430,12 @@ export const DedicatedSpectrumAnalyzerScreen: React.FC<Props> = ({
               </View>
             ) : carriers.map((c, index) => {
               const isBaseHigh = c.type === 'DUPLEX' ? c.tx > c.rx : c.tx > 464;
+              const curBwKhz = Math.round((c.txBw > 1 ? c.txBw : (c.txBw || 0.0125) * 1000) * 10) / 10;
               return (
                 <View key={c.id} style={screenStyles.channelRow}>
-                  {/* Active Toggle Dot (Enlarged & high-contrast green indicator) */}
+                  {/* Active Toggle Dot (PWR) */}
                   <TouchableOpacity
-                    style={{ width: 22, height: 22, alignItems: 'center', justifyContent: 'center', marginRight: 2 }}
+                    style={{ width: 20, height: 22, alignItems: 'center', justifyContent: 'center' }}
                     onPress={() => {
                       setCarriers(prev => prev.map(item => item.id === c.id ? { ...item, active: !item.active } : item));
                     }}
@@ -3264,9 +3443,9 @@ export const DedicatedSpectrumAnalyzerScreen: React.FC<Props> = ({
                     activeOpacity={0.7}
                   >
                     <View style={{
-                      width: 14,
-                      height: 14,
-                      borderRadius: 7,
+                      width: 13,
+                      height: 13,
+                      borderRadius: 6.5,
                       backgroundColor: c.active ? '#10b981' : '#1e293b',
                       borderWidth: 1.5,
                       borderColor: c.active ? '#34d399' : '#475569',
@@ -3278,47 +3457,37 @@ export const DedicatedSpectrumAnalyzerScreen: React.FC<Props> = ({
                       elevation: c.active ? 3 : 0
                     }}>
                       {c.active && (
-                        <View style={{ width: 5, height: 5, borderRadius: 2.5, backgroundColor: '#ecfdf5' }} />
+                        <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: '#ecfdf5' }} />
                       )}
                     </View>
                   </TouchableOpacity>
 
                   {/* Channel Number Badge: matches spike number on canvas */}
-                  <View style={{ width: 18, height: 19, borderRadius: 3, backgroundColor: '#070f1a', borderWidth: 1, borderColor: '#334155', alignItems: 'center', justifyContent: 'center', marginRight: 1 }}>
-                    <Text style={{ color: '#38bdf8', fontSize: 9, fontWeight: '900', fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace' }}>{getCarrierChannelNumber(c, index)}</Text>
+                  <View style={{ width: 16, height: 19, borderRadius: 3, backgroundColor: '#070f1a', borderWidth: 1, borderColor: '#334155', alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={{ color: '#38bdf8', fontSize: 8.5, fontWeight: '900', fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace' }}>{getCarrierChannelNumber(c, index)}</Text>
                   </View>
 
-                  {/* Padlock Icon: Next to green on/off toggle dot on left hand side of base tx box */}
+                  {/* Padlock Icon */}
                   <TouchableOpacity
                     onPress={() => {
                       setCarriers(prev => prev.map(item => item.id === c.id ? { ...item, locked: !item.locked } : item));
                     }}
-                    style={{ width: 18, height: 20, alignItems: 'center', justifyContent: 'center' }}
+                    style={{ width: 16, height: 20, alignItems: 'center', justifyContent: 'center' }}
                     hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
                     activeOpacity={0.6}
                   >
-                    <HardwarePadlockIcon locked={!!c.locked} size={15} />
+                    <HardwarePadlockIcon locked={!!c.locked} size={14} />
                   </TouchableOpacity>
 
-                  {/* Direction / Type Badge (No extra text above, snug spacing) */}
-                  <View style={{ marginRight: 1, alignItems: 'center', justifyContent: 'center' }}>
-                    <View style={{ flexDirection: 'row', gap: 2, alignItems: 'center' }}>
-                      <Text style={screenStyles.channelType}>
-                        {c.type === 'DUPLEX' ? 'DPX' : (c.type === 'BASE_TX' ? 'BASE' : (c.type === 'PORT_TX' ? 'PORT' : c.type))}
-                      </Text>
-                      {c.type === 'DUPLEX' && (
-                        <Text style={[
-                          screenStyles.directionTag,
-                          isBaseHigh ? screenStyles.directionTagEu : screenStyles.directionTagUk
-                        ]}>
-                          {isBaseHigh ? 'HI' : 'LO'}
-                        </Text>
-                      )}
-                    </View>
+                  {/* Direction / Type Badge */}
+                  <View style={{ width: 24, alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={screenStyles.channelType}>
+                      {c.type === 'DUPLEX' ? 'DPX' : (c.type === 'BASE_TX' ? 'BASE' : (c.type === 'PORT_TX' ? 'PORT' : 'WLK'))}
+                    </Text>
                   </View>
 
-                  {/* TX Frequency with Left / Right Nudge Arrows */}
-                  <View style={screenStyles.nudgeGroup}>
+                  {/* BASE TX Frequency with Left / Right Nudge Arrows */}
+                  <View style={[screenStyles.nudgeGroup, { flex: 1, justifyContent: 'center' }]}>
                     <TouchableOpacity
                       style={[screenStyles.sideArrowBtn, c.locked && { opacity: 0.3 }]}
                       onPress={() => !c.locked && handleCarrierNudge(c.id, 'tx', -1)}
@@ -3328,8 +3497,12 @@ export const DedicatedSpectrumAnalyzerScreen: React.FC<Props> = ({
                       <Text style={screenStyles.sideArrowText}>▼</Text>
                     </TouchableOpacity>
                     <View style={[screenStyles.freqNudgeBox, c.locked && screenStyles.freqNudgeBoxLocked]}>
-                      <Text style={[screenStyles.freqNudgePrefix, isBaseHigh && { color: '#38bdf8' }]}>TX</Text>
-                      <Text style={[screenStyles.freqNudgeVal, c.locked && { color: "#4ade80" }]}>{c.tx.toFixed(5)}</Text>
+                      <Text
+                        numberOfLines={1}
+                        style={[screenStyles.freqNudgeVal, c.locked && { color: "#4ade80" }]}
+                      >
+                        {(c.tx != null && !isNaN(c.tx) ? c.tx : 0).toFixed(5)}
+                      </Text>
                     </View>
                     <TouchableOpacity
                       style={[screenStyles.sideArrowBtn, c.locked && { opacity: 0.3 }]}
@@ -3341,8 +3514,8 @@ export const DedicatedSpectrumAnalyzerScreen: React.FC<Props> = ({
                     </TouchableOpacity>
                   </View>
 
-                  {/* Quick Swap TX/RX for single channel */}
-                  {c.type === 'DUPLEX' && (
+                  {/* Quick Swap TX/RX for single channel (or aligned spacer) */}
+                  {c.type === 'DUPLEX' ? (
                     <TouchableOpacity
                       style={screenStyles.rowSwapBtn}
                       onPress={() => !c.locked && handleSwapSingleCarrier(c.id)}
@@ -3351,11 +3524,13 @@ export const DedicatedSpectrumAnalyzerScreen: React.FC<Props> = ({
                     >
                       <Text style={screenStyles.rowSwapBtnText}>⇄</Text>
                     </TouchableOpacity>
+                  ) : (
+                    <View style={{ width: 16 }} />
                   )}
 
-                  {/* RX Frequency (if duplex) with Left / Right Nudge Arrows */}
+                  {/* PORT TX Frequency with Left / Right Nudge Arrows */}
                   {c.type === 'DUPLEX' ? (
-                    <View style={screenStyles.nudgeGroup}>
+                    <View style={[screenStyles.nudgeGroup, { flex: 1, justifyContent: 'center' }]}>
                       <TouchableOpacity
                         style={[screenStyles.sideArrowBtn, c.locked && { opacity: 0.3 }]}
                         onPress={() => !c.locked && handleCarrierNudge(c.id, 'rx', -1)}
@@ -3365,8 +3540,12 @@ export const DedicatedSpectrumAnalyzerScreen: React.FC<Props> = ({
                         <Text style={screenStyles.sideArrowText}>▼</Text>
                       </TouchableOpacity>
                       <View style={[screenStyles.freqNudgeBox, c.locked && screenStyles.freqNudgeBoxLocked]}>
-                        <Text style={[screenStyles.freqNudgePrefix, { color: isBaseHigh ? '#34d399' : '#38bdf8' }]}>RX</Text>
-                        <Text style={[screenStyles.freqNudgeVal, c.locked ? { color: "#4ade80" } : { color: isBaseHigh ? "#86efac" : "#38bdf8" }]}>{c.rx.toFixed(5)}</Text>
+                        <Text
+                          numberOfLines={1}
+                          style={[screenStyles.freqNudgeVal, c.locked ? { color: "#4ade80" } : { color: isBaseHigh ? "#86efac" : "#38bdf8" }]}
+                        >
+                          {(c.rx != null && !isNaN(c.rx) ? c.rx : 0).toFixed(5)}
+                        </Text>
                       </View>
                       <TouchableOpacity
                         style={[screenStyles.sideArrowBtn, c.locked && { opacity: 0.3 }]}
@@ -3377,11 +3556,27 @@ export const DedicatedSpectrumAnalyzerScreen: React.FC<Props> = ({
                         <Text style={screenStyles.sideArrowText}>▲</Text>
                       </TouchableOpacity>
                     </View>
-                  ) : null}
+                  ) : (
+                    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+                      <Text style={screenStyles.simplexPlaceholderText}>— SIMPLEX —</Text>
+                    </View>
+                  )}
 
-                  {/* Delete Button (inside container box) */}
+                  {/* BANDWIDTH (BW) COLUMN */}
                   <TouchableOpacity
-                    style={{ width: 20, height: 22, alignItems: 'center', justifyContent: 'center', marginLeft: 'auto' }}
+                    style={screenStyles.bwBadgeBox}
+                    onPress={() => !c.locked && handleCycleCarrierBw(c.id)}
+                    activeOpacity={0.7}
+                    title="Tap to cycle channel bandwidth (12.5k, 25k, 50k)"
+                  >
+                    <Text style={screenStyles.bwBadgeText}>
+                      {curBwKhz}k
+                    </Text>
+                  </TouchableOpacity>
+
+                  {/* Delete Button */}
+                  <TouchableOpacity
+                    style={{ width: 20, height: 22, alignItems: 'center', justifyContent: 'center' }}
                     onPress={() => {
                       setCarriers(prev => prev.filter(item => item.id !== c.id));
                     }}
@@ -4500,19 +4695,43 @@ const screenStyles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '900'
   },
+  ledgerHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#1e293b',
+    paddingBottom: 4,
+    marginBottom: 6,
+    paddingHorizontal: 2,
+    gap: 2,
+    width: '100%'
+  },
+  colHeader: {
+    color: '#38bdf8',
+    fontSize: 8.5,
+    fontWeight: 'bold',
+    letterSpacing: 0.5
+  },
+  simplexPlaceholderText: {
+    color: '#475569',
+    fontSize: 8,
+    fontWeight: 'bold',
+    letterSpacing: 0.5
+  },
   channelRow: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#020617',
-    paddingHorizontal: 4,
-    paddingVertical: 4,
+    paddingHorizontal: 2,
+    paddingVertical: 3,
     borderRadius: 4,
     borderWidth: 1,
     borderColor: '#1e293b',
-    gap: 3
+    gap: 2,
+    width: '100%'
   },
   toggleDot: {
-    padding: 3
+    padding: 2
   },
   toggleDotActive: {
     opacity: 1
@@ -4533,13 +4752,13 @@ const screenStyles = StyleSheet.create({
   nudgeGroup: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 2
+    gap: 1
   },
   sideArrowBtn: {
-    width: 17,
+    width: 14,
     height: 22,
     backgroundColor: '#1e293b',
-    borderRadius: 3,
+    borderRadius: 2.5,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
@@ -4547,19 +4766,37 @@ const screenStyles = StyleSheet.create({
   },
   sideArrowText: {
     color: '#38bdf8',
-    fontSize: 9,
+    fontSize: 8,
+    fontWeight: 'bold',
+    lineHeight: 10
+  },
+  rowSwapBtn: {
+    width: 16,
+    height: 22,
+    backgroundColor: '#1e293b',
+    borderRadius: 2.5,
+    borderWidth: 1,
+    borderColor: '#38bdf8',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  rowSwapBtnText: {
+    color: '#38bdf8',
+    fontSize: 10,
     fontWeight: 'bold'
   },
   freqNudgeBox: {
-    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: '#0f172a',
-    paddingHorizontal: 4,
-    paddingVertical: 3,
+    paddingHorizontal: 0,
+    paddingVertical: 1,
     borderRadius: 3,
     borderWidth: 1,
     borderColor: '#334155',
-    gap: 3
+    minHeight: 22,
+    minWidth: 50,
+    flex: 1
   },
   freqNudgeBoxLocked: {
     borderColor: '#10b981',
@@ -4574,7 +4811,27 @@ const screenStyles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 8.5,
     fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-    fontWeight: 'bold'
+    fontWeight: 'bold',
+    textAlign: 'center',
+    letterSpacing: -0.3
+  },
+  bwBadgeBox: {
+    width: 36,
+    height: 22,
+    backgroundColor: '#0f172a',
+    borderRadius: 3,
+    borderWidth: 1,
+    borderColor: '#38bdf8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 1
+  },
+  bwBadgeText: {
+    color: '#38bdf8',
+    fontSize: 8.5,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontWeight: '900',
+    textAlign: 'center'
   },
   freqNudgeInput: {
     color: '#ffffff',
@@ -4597,6 +4854,22 @@ const screenStyles = StyleSheet.create({
   stepPillActive: {
     backgroundColor: '#0284c7',
     borderColor: '#38bdf8'
+  },
+  clearAllBtn: {
+    paddingHorizontal: 6,
+    paddingVertical: 2.5,
+    backgroundColor: '#3f1212',
+    borderRadius: 3,
+    borderWidth: 1,
+    borderColor: '#ef4444',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  clearAllBtnText: {
+    color: '#fca5a5',
+    fontSize: 8,
+    fontWeight: 'bold',
+    letterSpacing: 0.3
   },
   stepPillText: {
     color: '#94a3b8',
@@ -6167,6 +6440,9 @@ export const coordinateAllZones = ({
                                 txIsBase: true,
                                 rxIsBase: false,
                                 isSimplex: false,
+                                bw: (parseFloat(band.bw) || 12.5) / 1000,
+                                txBw: (parseFloat(band.bw) || 12.5) / 1000,
+                                rxBw: (parseFloat(band.bw) || 12.5) / 1000,
                                 zoneId: zoneId,
                                 zoneName: zoneName,
                                 bandId: bandId,
@@ -6208,6 +6484,9 @@ export const coordinateAllZones = ({
                                 txIsBase: true,
                                 rxIsBase: false,
                                 isSimplex: false,
+                                bw: (parseFloat(band.bw) || 12.5) / 1000,
+                                txBw: (parseFloat(band.bw) || 12.5) / 1000,
+                                rxBw: (parseFloat(band.bw) || 12.5) / 1000,
                                 zoneId: zoneId,
                                 zoneName: zoneName,
                                 bandId: bandId,
@@ -6257,6 +6536,9 @@ export const coordinateAllZones = ({
                                 rxIsBase: false,
                                 isSimplex: true,
                                 simplexType: 'base_tx',
+                                bw: (parseFloat(band.bw) || 12.5) / 1000,
+                                txBw: (parseFloat(band.bw) || 12.5) / 1000,
+                                rxBw: (parseFloat(band.bw) || 12.5) / 1000,
                                 zoneId: zoneId,
                                 zoneName: zoneName,
                                 bandId: bandId,
@@ -6305,6 +6587,9 @@ export const coordinateAllZones = ({
                                 rxIsBase: false,
                                 isSimplex: true,
                                 simplexType: 'walkie',
+                                bw: (parseFloat(band.bw) || 12.5) / 1000,
+                                txBw: (parseFloat(band.bw) || 12.5) / 1000,
+                                rxBw: (parseFloat(band.bw) || 12.5) / 1000,
                                 zoneId: zoneId,
                                 zoneName: zoneName,
                                 bandId: bandId,
@@ -6349,6 +6634,9 @@ export interface SpectrumCarrier {
   freq: number;
   label: string;
   type: 'BASE_TX' | 'PORT_TX' | 'IFB' | 'WALKIE';
+  bw?: number | string;
+  txBw?: number;
+  rxBw?: number;
   isKeyed?: boolean;
   isGhost?: boolean;
   hasClash?: boolean;
@@ -6474,9 +6762,9 @@ export function useTacticalSpectrumAnalyzer({
   };
 
   const [canvasWidth, setCanvasWidth] = useState<number>(330);
-  const CANVAS_HEIGHT = 175;
-  const TOP_MARGIN = 20;
-  const BOTTOM_MARGIN = 24;
+  const CANVAS_HEIGHT = 200;
+  const TOP_MARGIN = 22;
+  const BOTTOM_MARGIN = 26;
   const PLOT_HEIGHT = CANVAS_HEIGHT - TOP_MARGIN - BOTTOM_MARGIN;
   const NOISE_FLOOR_DBM = -100;
   const REF_LEVEL_DBM = 0;
@@ -7000,6 +7288,8 @@ export const TacticalSpectrumAnalyzerScope: React.FC<{ state: TacticalSpectrumAn
           {/* 10x10 Calibrated Graticule Grid */}
           {dbmLevels.map((dbm) => {
             const y = dbmToY(dbm);
+            const labelY = dbm === 0 ? y + 8 : (dbm === -100 ? y - 3 : y - 2);
+            const textLabel = dbm === 0 ? '0 dBm' : `${dbm}`;
             return (
               <G key={`dbm_${dbm}`}>
                 <Line
@@ -7012,14 +7302,15 @@ export const TacticalSpectrumAnalyzerScope: React.FC<{ state: TacticalSpectrumAn
                   strokeDasharray={dbm === 0 || dbm === -100 ? 'none' : '2, 4'}
                 />
                 <SvgText
-                  x={canvasWidth - 4}
-                  y={y - 2}
-                  fill="#1e4e6e"
+                  x={canvasWidth - 5}
+                  y={labelY}
+                  fill="#3b6e8c"
                   fontSize="7.5"
+                  fontWeight="bold"
                   fontFamily={Platform.OS === 'ios' ? 'Courier' : 'monospace'}
                   textAnchor="end"
                 >
-                  {dbm} dBm
+                  {textLabel}
                 </SvgText>
               </G>
             );
@@ -7179,7 +7470,7 @@ export const TacticalSpectrumAnalyzerScope: React.FC<{ state: TacticalSpectrumAn
           {/* Active Carriers & Standby Ghosts */}
           {carriers.map((car, idx) => {
             const x = freqToX(car.freq);
-            if (x < -20 || x > canvasWidth + 20) return null;
+            if (x < -40 || x > canvasWidth + 40) return null;
             const isGhost = !!car.isGhost;
             const isKeyed = !!car.isKeyed;
             const dbm = car.powerDbm ?? (isGhost ? -52 : (car.type === 'BASE_TX' ? -10 : -18));
@@ -7189,7 +7480,14 @@ export const TacticalSpectrumAnalyzerScope: React.FC<{ state: TacticalSpectrumAn
             const hitImd = imds.find(imd => Math.abs(imd.freq - car.freq) <= 0.005);
             const hasClash = !!(car.hasClash || hitImd);
 
-            const halfBwPx = ((rbwKhz / 1000) / span) * canvasWidth;
+            // Exact channel bandwidth in MHz (12.5 kHz = 0.0125 MHz, 25 kHz = 0.025 MHz, 50 kHz = 0.050 MHz)
+            const carBwMhz = (typeof car.bw === 'number' && car.bw > 0)
+              ? (car.bw > 1 ? car.bw / 1000 : car.bw)
+              : (typeof car.bw === 'string' && parseFloat(car.bw) > 0)
+                ? (parseFloat(car.bw) > 1 ? parseFloat(car.bw) / 1000 : parseFloat(car.bw))
+                : (typeof car.txBw === 'number' && car.txBw > 0)
+                  ? (car.txBw > 1 ? car.txBw / 1000 : car.txBw)
+                  : 0.0125;
 
             let strokeColor = '#facc15';
             if (isRx) strokeColor = isKeyed ? '#22c55e' : (isGhost ? '#38bdf8' : '#38bdf8');
@@ -7198,11 +7496,13 @@ export const TacticalSpectrumAnalyzerScope: React.FC<{ state: TacticalSpectrumAn
             if (car.locked) strokeColor = '#4ade80';
             if (hasClash) strokeColor = '#ef4444';
 
-            const leftX = x - Math.max(4, halfBwPx);
-            const rightX = x + Math.max(4, halfBwPx);
+            // Exact physical spectrum footprint on the canvas graticule
+            const leftX = freqToX(car.freq - carBwMhz / 2);
+            const rightX = freqToX(car.freq + carBwMhz / 2);
+            const halfBwPx = (rightX - leftX) / 2;
             const baseY = TOP_MARGIN + PLOT_HEIGHT;
 
-            const pathData = `M ${leftX - 6} ${baseY} Q ${leftX} ${baseY} ${x - 2} ${peakY + 2} L ${x} ${peakY} L ${x + 2} ${peakY + 2} Q ${rightX} ${baseY} ${rightX + 6} ${baseY} Z`;
+            const pathData = `M ${leftX} ${baseY} Q ${leftX + halfBwPx * 0.45} ${baseY} ${x - Math.max(1, halfBwPx * 0.12)} ${peakY + 2} L ${x} ${peakY} L ${x + Math.max(1, halfBwPx * 0.12)} ${peakY + 2} Q ${rightX - halfBwPx * 0.45} ${baseY} ${rightX} ${baseY} Z`;
 
             if (isGhost) {
               return (
@@ -7214,6 +7514,11 @@ export const TacticalSpectrumAnalyzerScope: React.FC<{ state: TacticalSpectrumAn
                     strokeWidth={hasClash ? '2.5' : '1.2'}
                     strokeDasharray={hasClash ? 'none' : '3, 3'}
                   />
+                  {/* Channel bandwidth footprint baseline bar */}
+                  <Line x1={leftX} y1={baseY - 1} x2={rightX} y2={baseY - 1} stroke={strokeColor} strokeWidth="2" opacity="0.6" strokeDasharray="2, 2" />
+                  <Line x1={leftX} y1={baseY - 3} x2={leftX} y2={baseY + 1} stroke={strokeColor} strokeWidth="1" opacity="0.6" />
+                  <Line x1={rightX} y1={baseY - 3} x2={rightX} y2={baseY + 1} stroke={strokeColor} strokeWidth="1" opacity="0.6" />
+
                   <Circle
                     cx={x}
                     cy={peakY}
@@ -7232,8 +7537,8 @@ export const TacticalSpectrumAnalyzerScope: React.FC<{ state: TacticalSpectrumAn
                     textAnchor="middle"
                     opacity="0.95"
                   >
-                    {hasClash ? '[! CLASH] ' : ' '}
-                    {car.label}
+                    {hasClash ? '⚠️ ' : ''}
+                    {car.label || (idx + 1)}
                   </SvgText>
                 </G>
               );
@@ -7255,6 +7560,11 @@ export const TacticalSpectrumAnalyzerScope: React.FC<{ state: TacticalSpectrumAn
                   stroke={strokeColor}
                   strokeWidth={hasClash ? '3' : (isKeyed ? '2.2' : '1.8')}
                 />
+                {/* Channel bandwidth footprint baseline bar */}
+                <Line x1={leftX} y1={baseY - 1} x2={rightX} y2={baseY - 1} stroke={strokeColor} strokeWidth="2.5" opacity="0.85" />
+                <Line x1={leftX} y1={baseY - 4} x2={leftX} y2={baseY + 1} stroke={strokeColor} strokeWidth="1.2" opacity="0.85" />
+                <Line x1={rightX} y1={baseY - 4} x2={rightX} y2={baseY + 1} stroke={strokeColor} strokeWidth="1.2" opacity="0.85" />
+
                 <Circle
                   cx={x}
                   cy={peakY}
@@ -7272,8 +7582,8 @@ export const TacticalSpectrumAnalyzerScope: React.FC<{ state: TacticalSpectrumAn
                   fontFamily={Platform.OS === 'ios' ? 'Courier' : 'monospace'}
                   textAnchor="middle"
                 >
-                  {hasClash ? '[! CLASH] ' : (isKeyed ? ' ' : '')}
-                  {car.label}
+                  {hasClash ? '⚠️ ' : ''}
+                  {car.label || (idx + 1)}
                 </SvgText>
               </G>
             );
@@ -11254,6 +11564,36 @@ export default function App() {
   };
 
   // --- NUDGE & LOCK ---
+  const getChannelBwLabel = (item: any): string => {
+    const raw = item?.bw || item?.txBw || 12.5;
+    const num = typeof raw === 'string' ? parseFloat(raw) : Number(raw);
+    if (isNaN(num) || num <= 0) return '12.5k';
+    if (num === 12.5 || num === 0.0125) return '12.5k';
+    if (num === 25 || num === 0.025) return '25k';
+    if (num === 50 || num === 0.05) return '50k';
+    return num > 1 ? `${num}k` : `${(num * 1000).toFixed(1)}k`;
+  };
+
+  const cycleChannelBw = (index: number) => {
+    const newPlan = [...generatedPlan];
+    const curItem = newPlan[index];
+    if (!curItem) return;
+    const raw = curItem.bw || curItem.txBw || 12.5;
+    const num = typeof raw === 'string' ? parseFloat(raw) : Number(raw);
+    let nextKhz = 12.5;
+    if (num < 18 || num === 0.0125) nextKhz = 25;
+    else if (num < 35 || num === 0.025) nextKhz = 50;
+    else nextKhz = 12.5;
+
+    newPlan[index] = {
+      ...curItem,
+      bw: `${nextKhz}`,
+      txBw: nextKhz / 1000,
+      rxBw: nextKhz / 1000
+    };
+    setGeneratedPlan(newPlan);
+  };
+
   const nudgeFreq = (index, direction, type) => {
     const newPlan = [...generatedPlan];
     let val = newPlan[index][type] + (direction * nudgeStep);
@@ -11269,7 +11609,6 @@ export default function App() {
     }
     newPlan[index][type] = val;
     newPlan[index][type + 'Str'] = val.toFixed(5);
-    newPlan[index].locked = true; 
     setGeneratedPlan(newPlan);
   };
 
@@ -11300,6 +11639,22 @@ export default function App() {
       newPlan[index].active = newPlan[index].active !== undefined ? !newPlan[index].active : false;
       setGeneratedPlan(newPlan);
     }
+  };
+
+  const cyclePlanBw = (index: number) => {
+    const newPlan = [...generatedPlan];
+    if (!newPlan[index]) return;
+    const curKhz = newPlan[index].txBw
+      ? (newPlan[index].txBw > 1 ? newPlan[index].txBw : newPlan[index].txBw * 1000)
+      : (parseFloat(newPlan[index].bw) || 12.5);
+    let nextKhz = 12.5;
+    if (curKhz < 18) nextKhz = 25.0; // 12.5k -> 25k
+    else if (curKhz < 35) nextKhz = 50.0; // 25k -> 50k
+    else nextKhz = 12.5; // 50k -> 12.5k
+    newPlan[index].bw = `${nextKhz}`;
+    newPlan[index].txBw = nextKhz / 1000;
+    newPlan[index].rxBw = nextKhz / 1000;
+    setGeneratedPlan(newPlan);
   };
 
   const deleteItem = (index) => {
@@ -11463,6 +11818,10 @@ export default function App() {
       const isKeyed = !!keyedChannels[origIdx];
       const hasClash = !!activeZonePlanCollisions[origIdx];
 
+      // Extract accurate channel bandwidth in MHz
+      const carBw = p.txBw || (typeof p.bw === 'number' ? (p.bw > 1 ? p.bw / 1000 : p.bw) : (parseFloat(p.bw) > 1 ? parseFloat(p.bw) / 1000 : parseFloat(p.bw))) || 0.0125;
+      const rxBw = p.rxBw || (typeof p.bw === 'number' ? (p.bw > 1 ? p.bw / 1000 : p.bw) : (parseFloat(p.bw) > 1 ? parseFloat(p.bw) / 1000 : parseFloat(p.bw))) || carBw;
+
       if (topPanelMode === 'PTT_SIM') {
         if (!p.isSimplex) {
           // 1. Base Station Transmitter: Always continuous on air (Gold/Amber)
@@ -11470,6 +11829,9 @@ export default function App() {
             freq: p.tx,
             label: `B${chNum} BASE [CONT]`,
             type: 'BASE_TX',
+            bw: carBw,
+            txBw: carBw,
+            rxBw: rxBw,
             isKeyed: false,
             isGhost: false,
             hasClash,
@@ -11486,6 +11848,9 @@ export default function App() {
             freq: p.rx,
             label: isKeyed ? `H${chNum} [ACTIVE]` : `H${chNum} [PTT]`,
             type: 'PORT_TX',
+            bw: rxBw,
+            txBw: carBw,
+            rxBw: rxBw,
             isKeyed,
             isGhost: !isKeyed,
             hasClash,
@@ -11500,6 +11865,9 @@ export default function App() {
             freq: p.tx,
             label: `IFB${chNum} [BASE CONT]`,
             type: 'IFB',
+            bw: carBw,
+            txBw: carBw,
+            rxBw: rxBw,
             isKeyed: false,
             isGhost: false,
             hasClash,
@@ -11514,6 +11882,9 @@ export default function App() {
             freq: p.tx,
             label: isKeyed ? `WT${chNum} [ACTIVE]` : `WT${chNum} [PTT]`,
             type: 'WALKIE',
+            bw: carBw,
+            txBw: carBw,
+            rxBw: rxBw,
             isKeyed,
             isGhost: !isKeyed,
             hasClash,
@@ -11530,6 +11901,9 @@ export default function App() {
             freq: p.tx,
             label: `${chNum}`,
             type: 'BASE_TX',
+            bw: carBw,
+            txBw: carBw,
+            rxBw: rxBw,
             hasClash,
             powerDbm: -10,
             zoneName: p.zoneName,
@@ -11540,6 +11914,9 @@ export default function App() {
             freq: p.rx,
             label: `${chNum}`,
             type: 'PORT_TX',
+            bw: rxBw,
+            txBw: carBw,
+            rxBw: rxBw,
             hasClash,
             powerDbm: -25,
             zoneName: p.zoneName,
@@ -11551,6 +11928,9 @@ export default function App() {
             freq: p.tx,
             label: `${chNum}`,
             type: p.simplexType === 'base_tx' ? 'IFB' : 'WALKIE',
+            bw: carBw,
+            txBw: carBw,
+            rxBw: rxBw,
             hasClash,
             powerDbm: p.simplexType === 'base_tx' ? -12 : -20,
             zoneName: p.zoneName,
@@ -12879,7 +13259,7 @@ export default function App() {
                         keyboardType="decimal-pad"
                         placeholder="0.000"
                         placeholderTextColor="#475569"
-                        selectTextOnFocus
+                        selectTextOnFocus={false}
                         returnKeyType="done"
                         onSubmitEditing={() => handleZoneKeypadPress('ENTER')}
                       />
@@ -14027,13 +14407,15 @@ export default function App() {
 
                     <View style={styles.ledgerHeaderRow}>
                         {isAllZones && <Text style={[styles.colHeader, {width: 20, textAlign: 'center'}]}>ZN</Text>}
-                        <Text style={[styles.colHeader, {width: 24, textAlign: 'center', marginRight: 2}]} numberOfLines={1}>PWR</Text>
-                        <Text style={[styles.colHeader, {width: 20, textAlign: 'center', marginRight: 3}]}>#</Text>
-                        <View style={{width: 20, marginRight: 3}} />
-                        <Text style={[styles.colHeader, {width: 27, textAlign: 'center'}]}>TYPE</Text>
+                        <Text style={[styles.colHeader, {width: 20, textAlign: 'center'}]}>PWR</Text>
+                        <Text style={[styles.colHeader, {width: 16, textAlign: 'center'}]}>#</Text>
+                        <View style={{width: 16}} />
+                        <Text style={[styles.colHeader, {width: 24, textAlign: 'center'}]}>TYPE</Text>
                         <Text style={[styles.colHeader, {flex: 1, textAlign: 'center'}]}>BASE TX</Text>
+                        <View style={{width: 4}} />
                         <Text style={[styles.colHeader, {flex: 1, textAlign: 'center'}]}>PORT TX</Text>
-                        <Text style={[styles.colHeader, {width: 24, textAlign: 'center'}]}>DEL</Text>
+                        <Text style={[styles.colHeader, {width: 36, textAlign: 'center'}]}>BW</Text>
+                        <Text style={[styles.colHeader, {width: 20, textAlign: 'center'}]}>DEL</Text>
                     </View>
 
                     {displayItems.length === 0 ? (
@@ -14060,24 +14442,24 @@ export default function App() {
 
                           return (
                               <View key={`plan-${index}`} style={{marginBottom: 6, opacity: item.active === false ? 0.5 : 1}}>
-                                <View style={[styles.ledgerRow, { alignItems: 'flex-start', backgroundColor: rowBg, borderColor: clashBorder, borderWidth: hasClash ? 1 : 0 }]}>
+                                <View style={[styles.ledgerRow, { backgroundColor: rowBg, borderColor: clashBorder, borderWidth: hasClash ? 1 : 0 }]}>
                                   {isAllZones && (
                                     <View style={styles.zoneRowBadge}>
                                       <Text style={styles.zoneRowBadgeText}>{itemZoneTag}</Text>
                                     </View>
                                   )}
 
-                                  {/* ON/OFF GREEN CIRCLE TOGGLE */}
+                                  {/* ON/OFF GREEN CIRCLE TOGGLE (PWR) */}
                                   <TouchableOpacity
-                                    style={{ width: 24, paddingTop: 5, alignItems: 'center', justifyContent: 'center', marginRight: 2 }}
+                                    style={{ width: 20, height: 22, alignItems: 'center', justifyContent: 'center' }}
                                     onPress={() => toggleActive(index)}
-                                    hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+                                    hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
                                     activeOpacity={0.6}
                                   >
                                     <View style={{
-                                      width: 14,
-                                      height: 14,
-                                      borderRadius: 7,
+                                      width: 13,
+                                      height: 13,
+                                      borderRadius: 6.5,
                                       backgroundColor: item.active !== false ? '#10b981' : '#1e293b',
                                       borderWidth: 1.5,
                                       borderColor: item.active !== false ? '#34d399' : '#475569',
@@ -14089,12 +14471,12 @@ export default function App() {
                                       elevation: item.active !== false ? 3 : 0
                                     }}>
                                       {item.active !== false && (
-                                        <View style={{ width: 5, height: 5, borderRadius: 2.5, backgroundColor: '#ecfdf5' }} />
+                                        <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: '#ecfdf5' }} />
                                       )}
                                     </View>
                                   </TouchableOpacity>
 
-                                  {/* CHANNEL NUMBER BADGE (matches spike number on spectrum canvas) */}
+                                  {/* CHANNEL NUMBER BADGE */}
                                   <View style={styles.channelNumBadge}>
                                     <Text style={styles.channelNumBadgeText}>{item.channelNumber || (index + 1)}</Text>
                                   </View>
@@ -14102,74 +14484,125 @@ export default function App() {
                                   {/* PADLOCK LOCK / UNLOCK TOGGLE */}
                                   <TouchableOpacity 
                                     onPress={() => toggleLock(index)} 
-                                    style={{width: 20, paddingTop: 5, alignItems: 'center', justifyContent: 'center', marginRight: 3}}
-                                    hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
+                                    style={{ width: 16, height: 20, alignItems: 'center', justifyContent: 'center' }}
+                                    hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
                                     activeOpacity={0.6}
                                   >
-                                      <HardwarePadlockIcon locked={!!item.locked} size={16} />
+                                    <HardwarePadlockIcon locked={!!item.locked} size={14} />
                                   </TouchableOpacity>
                                   
-                                  {/* NARROWED TYPE BADGE */}
-                                  <View style={[styles.typeBadge, {backgroundColor: hasClash ? '#ef4444' : typeBadgeBg}]}>
-                                      <Text style={styles.typeBadgeText}>{hasClash ? 'CLS' : typeBadgeText}</Text>
+                                  {/* TYPE BADGE */}
+                                  <View style={[styles.typeBadge, { backgroundColor: hasClash ? '#ef4444' : typeBadgeBg }]}>
+                                    <Text style={styles.typeBadgeText}>{hasClash ? 'CLS' : typeBadgeText}</Text>
                                   </View>
 
-                                  {/* WIDENED BASE TX FREQ (COMPLETELY ACCOMMODATES ALL DIGITS) */}
-                                  <View style={{flex: 1, marginRight: 4}}>
-                                      <TouchableOpacity 
-                                          activeOpacity={0.8}
-                                          style={[
-                                              styles.ledInputMuted, 
-                                              {color: hasClash ? '#ef4444' : txColor, fontSize: 12, justifyContent: 'center', height: 26},
-                                              zoneKeypadTarget === `ch::${index}::txStr` && styles.compactInputActive
-                                          ]} 
-                                          onPress={() => setZoneKeypadTarget(`ch::${index}::txStr`)}
+                                  {/* BASE TX FREQUENCY WITH LEFT (-) AND RIGHT (+) NUDGE BUTTONS */}
+                                  <View style={[styles.nudgeGroup, { flex: 1, justifyContent: 'center' }]}>
+                                    <TouchableOpacity
+                                      style={[styles.sideArrowBtn, item.locked && { opacity: 0.3 }]}
+                                      onPress={() => !item.locked && nudgeFreq(index, -1, 'tx')}
+                                      hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                                      disabled={item.locked}
+                                    >
+                                      <Text style={styles.sideArrowText}>-</Text>
+                                    </TouchableOpacity>
+                                    <View
+                                      style={[
+                                        styles.freqNudgeBox,
+                                        item.locked && styles.freqNudgeBoxLocked,
+                                        hasClash && { borderColor: '#ef4444', backgroundColor: 'rgba(239, 68, 68, 0.12)' }
+                                      ]}
+                                    >
+                                      <TextInput 
+                                        style={[
+                                          styles.freqNudgeVal,
+                                          { color: hasClash ? '#ef4444' : txColor, width: '100%', padding: 0 }
+                                        ]}
+                                        value={item.txStr || (item.tx ? item.tx.toFixed(5) : '')}
+                                        onChangeText={(text) => !item.locked && updateProp(index, 'txStr', text)}
+                                        keyboardType="decimal-pad"
+                                        editable={!item.locked}
+                                        selectTextOnFocus={false}
+                                      />
+                                    </View>
+                                    <TouchableOpacity
+                                      style={[styles.sideArrowBtn, item.locked && { opacity: 0.3 }]}
+                                      onPress={() => !item.locked && nudgeFreq(index, 1, 'tx')}
+                                      hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                                      disabled={item.locked}
+                                    >
+                                      <Text style={styles.sideArrowText}>+</Text>
+                                    </TouchableOpacity>
+                                  </View>
+
+                                  {/* SPACER BETWEEN BASE TX AND PORT TX */}
+                                  <View style={{ width: 4 }} />
+
+                                  {/* PORTABLE TX FREQUENCY WITH LEFT (-) AND RIGHT (+) NUDGE BUTTONS */}
+                                  {!isSimplex ? (
+                                    <View style={[styles.nudgeGroup, { flex: 1, justifyContent: 'center' }]}>
+                                      <TouchableOpacity
+                                        style={[styles.sideArrowBtn, item.locked && { opacity: 0.3 }]}
+                                        onPress={() => !item.locked && nudgeFreq(index, -1, 'rx')}
+                                        hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                                        disabled={item.locked}
                                       >
-                                          <Text style={{color: hasClash ? '#ef4444' : txColor, fontSize: 12, fontWeight: 'bold', textAlign: 'center'}}>
-                                              {`${item.txStr}${zoneKeypadTarget === `ch::${index}::txStr` ? ' ▎' : ''}`}
-                                          </Text>
+                                        <Text style={styles.sideArrowText}>-</Text>
                                       </TouchableOpacity>
-                                      <View style={{flexDirection: 'row', justifyContent: 'space-between', marginTop: 4}}>
-                                          <TouchableOpacity style={styles.microBtn} onPress={() => nudgeFreq(index, -1, 'tx')}><Text style={styles.microBtnText}>-</Text></TouchableOpacity>
-                                          <TouchableOpacity style={styles.microBtn} onPress={() => nudgeFreq(index, 1, 'tx')}><Text style={styles.microBtnText}>+</Text></TouchableOpacity>
+                                      <View
+                                        style={[
+                                          styles.freqNudgeBox,
+                                          item.locked && styles.freqNudgeBoxLocked,
+                                          hasClash && { borderColor: '#ef4444', backgroundColor: 'rgba(239, 68, 68, 0.12)' }
+                                        ]}
+                                      >
+                                        <TextInput 
+                                          style={[
+                                            styles.freqNudgeVal,
+                                            { color: hasClash ? '#ef4444' : (item.locked ? '#4ade80' : '#38bdf8'), width: '100%', padding: 0 }
+                                          ]}
+                                          value={item.rxStr || (item.rx ? item.rx.toFixed(5) : '')}
+                                          onChangeText={(text) => !item.locked && updateProp(index, 'rxStr', text)}
+                                          keyboardType="decimal-pad"
+                                          editable={!item.locked}
+                                          selectTextOnFocus={false}
+                                        />
                                       </View>
-                                  </View>
+                                      <TouchableOpacity
+                                        style={[styles.sideArrowBtn, item.locked && { opacity: 0.3 }]}
+                                        onPress={() => !item.locked && nudgeFreq(index, 1, 'rx')}
+                                        hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                                        disabled={item.locked}
+                                      >
+                                        <Text style={styles.sideArrowText}>+</Text>
+                                      </TouchableOpacity>
+                                    </View>
+                                  ) : (
+                                    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+                                      <Text style={styles.simplexPlaceholderText}>— SIMPLEX —</Text>
+                                    </View>
+                                  )}
 
-                                  {/* WIDENED PORTABLE TX FREQ (COMPLETELY ACCOMMODATES ALL DIGITS) */}
-                                  <View style={{flex: 1, marginRight: 4}}>
-                                      {!isSimplex ? (
-                                          <>
-                                              <TouchableOpacity 
-                                                  activeOpacity={0.8}
-                                                  style={[
-                                                      styles.ledInputMuted, 
-                                                      {color: hasClash ? '#ef4444' : (item.locked ? '#4ade80' : '#38bdf8'), fontSize: 12, justifyContent: 'center', height: 26},
-                                                      zoneKeypadTarget === `ch::${index}::rxStr` && styles.compactInputActive
-                                                  ]} 
-                                                  onPress={() => setZoneKeypadTarget(`ch::${index}::rxStr`)}
-                                              >
-                                                  <Text style={{color: hasClash ? '#ef4444' : (item.locked ? '#4ade80' : '#38bdf8'), fontSize: 12, fontWeight: 'bold', textAlign: 'center'}}>
-                                                      {`${item.rxStr}${zoneKeypadTarget === `ch::${index}::rxStr` ? ' ▎' : ''}`}
-                                                  </Text>
-                                              </TouchableOpacity>
-                                              <View style={{flexDirection: 'row', justifyContent: 'space-between', marginTop: 4}}>
-                                                  <TouchableOpacity style={styles.microBtn} onPress={() => nudgeFreq(index, -1, 'rx')}><Text style={styles.microBtnText}>-</Text></TouchableOpacity>
-                                                  <TouchableOpacity style={styles.microBtn} onPress={() => nudgeFreq(index, 1, 'rx')}><Text style={styles.microBtnText}>+</Text></TouchableOpacity>
-                                              </View>
-                                          </>
-                                      ) : (
-                                          <View style={styles.simplexPlaceholder}>
-                                              <Text style={styles.simplexPlaceholderText}>SIMPLEX</Text>
-                                          </View>
-                                      )}
-                                  </View>
+                                  {/* BANDWIDTH (BW) COLUMN */}
+                                  <TouchableOpacity
+                                    style={styles.bwBoxBtn}
+                                    onPress={() => !item.locked && cycleChannelBw(index)}
+                                    activeOpacity={0.7}
+                                    disabled={item.locked}
+                                  >
+                                    <Text style={styles.bwBoxText}>
+                                      {getChannelBwLabel(item)}
+                                    </Text>
+                                  </TouchableOpacity>
 
                                   {/* DELETE */}
-                                  <View style={{width: 24, marginTop: 4, alignItems: 'center'}}>
-                                      <TouchableOpacity style={[styles.microBtn, {width: 22, height: 22, backgroundColor: '#7a1919', borderColor: '#e85f5f'}]} onPress={() => deleteItem(index)}>
-                                        <Text style={[styles.microBtnText, {fontSize: 9}]}>x</Text>
-                                      </TouchableOpacity>
-                                  </View>
+                                  <TouchableOpacity 
+                                    style={{ width: 20, height: 22, alignItems: 'center', justifyContent: 'center' }} 
+                                    onPress={() => deleteItem(index)}
+                                    hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                                  >
+                                    <Text style={{ fontSize: 13, color: '#ef4444', fontWeight: 'bold' }}>✕</Text>
+                                  </TouchableOpacity>
                                 </View>
                                 {hasClash && (
                                   <View style={styles.ledgerClashWarningRow}>
@@ -15147,11 +15580,11 @@ const styles = StyleSheet.create({
     borderRadius: 3,
     paddingHorizontal: 1,
     paddingVertical: 2,
-    marginRight: 3,
-    marginTop: 5,
+    marginRight: 2,
     alignItems: 'center',
     justifyContent: 'center',
     width: 20,
+    height: 19
   },
   zoneRowBadgeText: {
     color: '#38bdf8',
@@ -15164,16 +15597,102 @@ const styles = StyleSheet.create({
   tabBtnText: { color: '#64748b', fontSize: 10, fontWeight: 'bold', letterSpacing: 0.5 },
   tabBtnTextActive: { color: '#000' },
   ledgerScreen: { backgroundColor: '#0a1012', padding: 8, borderRadius: 4, borderTopWidth: 2, borderLeftWidth: 2, borderTopColor: '#000', borderLeftColor: '#000', minHeight: 180 },
-  ledgerHeaderRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#1e3036', paddingBottom: 5, marginBottom: 8 },
-  colHeader: { color: '#3b7a8a', fontSize: 8.5, fontWeight: 'bold', letterSpacing: 0.5 },
-  ledgerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
-  channelNumBadge: { width: 20, paddingVertical: 2.5, borderRadius: 3, backgroundColor: '#070f1a', borderWidth: 1, borderColor: '#334155', alignItems: 'center', justifyContent: 'center', marginRight: 3, marginTop: 5 },
+  ledgerHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#1e3036',
+    paddingBottom: 4,
+    marginBottom: 6,
+    paddingHorizontal: 2,
+    gap: 2,
+    width: '100%'
+  },
+  colHeader: { color: '#38bdf8', fontSize: 8.5, fontWeight: 'bold', letterSpacing: 0.5 },
+  ledgerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#020617',
+    paddingHorizontal: 2,
+    paddingVertical: 3,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#1e293b',
+    gap: 2,
+    width: '100%',
+    marginBottom: 6
+  },
+  nudgeGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 1
+  },
+  sideArrowBtn: {
+    width: 14,
+    height: 22,
+    backgroundColor: '#1e293b',
+    borderRadius: 2.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#475569'
+  },
+  sideArrowText: {
+    color: '#38bdf8',
+    fontSize: 9,
+    fontWeight: 'bold',
+    lineHeight: 11
+  },
+  freqNudgeBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0f172a',
+    paddingHorizontal: 0,
+    paddingVertical: 1,
+    borderRadius: 3,
+    borderWidth: 1,
+    borderColor: '#334155',
+    minHeight: 22,
+    minWidth: 50,
+    flex: 1
+  },
+  freqNudgeBoxLocked: {
+    borderColor: '#10b981',
+    backgroundColor: 'rgba(16, 185, 129, 0.08)'
+  },
+  freqNudgeVal: {
+    color: '#ffffff',
+    fontSize: 8.5,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontWeight: 'bold',
+    textAlign: 'center',
+    letterSpacing: -0.3
+  },
+  bwBoxBtn: {
+    width: 36,
+    height: 22,
+    backgroundColor: '#0f172a',
+    borderRadius: 3,
+    borderWidth: 1,
+    borderColor: '#38bdf8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 1
+  },
+  bwBoxText: {
+    color: '#38bdf8',
+    fontSize: 8.5,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontWeight: '900',
+    textAlign: 'center'
+  },
+  channelNumBadge: { width: 16, height: 19, borderRadius: 3, backgroundColor: '#070f1a', borderWidth: 1, borderColor: '#334155', alignItems: 'center', justifyContent: 'center' },
   channelNumBadgeText: { color: '#38bdf8', fontSize: 8.5, fontWeight: '900', fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace' },
-  typeBadge: { width: 27, paddingVertical: 2.5, borderRadius: 3, alignItems: 'center', justifyContent: 'center', marginRight: 3, marginTop: 5 },
+  typeBadge: { width: 24, paddingVertical: 2, borderRadius: 3, alignItems: 'center', justifyContent: 'center' },
   typeBadgeText: { color: '#fff', fontSize: 7.5, fontWeight: '900', letterSpacing: 0 },
   ledInputMuted: { backgroundColor: '#111a1f', color: '#fff', paddingVertical: 4, paddingHorizontal: 2, borderRadius: 3, borderWidth: 1, borderColor: '#000', fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace', textAlign: 'center' },
   simplexPlaceholder: { backgroundColor: '#0f172a', paddingVertical: 4, paddingHorizontal: 2, borderRadius: 3, borderWidth: 1, borderColor: '#1e293b', alignItems: 'center', justifyContent: 'center' },
-  simplexPlaceholderText: { color: '#475569', fontSize: 8.5, fontWeight: 'bold', letterSpacing: 0.5 },
+  simplexPlaceholderText: { color: '#475569', fontSize: 8, fontWeight: 'bold', letterSpacing: 0.5 },
   actionBtn: { backgroundColor: '#3a4049', paddingVertical: 6, paddingHorizontal: 10, borderRadius: 4, borderWidth: 1, borderColor: '#5c6573', alignItems: 'center', justifyContent: 'center' },
   actionBtnText: { color: '#fff', fontSize: 10, fontWeight: 'bold' },
   microBtn: { backgroundColor: '#1e293b', width: 24, height: 24, alignItems: 'center', justifyContent: 'center', borderRadius: 3, borderWidth: 1, borderColor: '#334155' },
